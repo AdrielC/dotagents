@@ -120,9 +120,9 @@ fn compile_node(
             }
         }
         AgentsTree::Rules(rules) => {
-            emit_cursor_rules(rules, ctx, current_scope, plan);
-            emit_claude_rules(rules, ctx, current_scope, plan);
-            emit_codex_rules(rules, ctx, current_scope, plan);
+            for backend in rule_backends() {
+                backend.emit(rules, ctx, current_scope, plan);
+            }
         }
         AgentsTree::Skills(skills) => {
             emit_skill_commands(skills, ctx, plan);
@@ -144,101 +144,113 @@ fn compile_node(
     Ok(())
 }
 
-fn emit_cursor_rules(
-    rules: &[crate::tree::RuleNode],
-    ctx: &CompileContext,
-    scope: &str,
-    plan: &mut CompiledPlan,
-) {
-    let dest_dir = ctx.project_path.join(".cursor").join("rules");
-    plan.push(FsOp::MkdirP { path: dest_dir.clone() });
+/// Emits [`FsOp`]s for one agent’s rule layout (Cursor rules dir, Claude rules dir, Codex `AGENTS.md`, …).
+trait RuleBackend {
+    fn emit(
+        &self,
+        rules: &[crate::tree::RuleNode],
+        ctx: &CompileContext,
+        scope: &str,
+        plan: &mut CompiledPlan,
+    );
+}
 
-    for r in rules {
-        let display = cursor_display_name(&r.name);
-        let dest = dest_dir.join(format!("{scope}--{display}"));
-        match &r.body {
-            RuleBody::Inline(text) => {
-                plan.push(FsOp::WriteFile {
-                    path: dest,
-                    overwrite: false,
-                    content: text.clone(),
-                });
-            }
-            RuleBody::Source(src) => {
-                let kind = if ctx.force_copy_for_rules {
-                    LinkKind::Copy
-                } else {
-                    LinkKind::HardLink
-                };
-                plan.push(FsOp::Link(PlannedLink {
-                    agent: AgentId::Cursor,
-                    kind,
-                    source: src.clone(),
-                    dest,
-                }));
-            }
+fn rule_backends() -> [&'static dyn RuleBackend; 3] {
+    [&CursorRulesBackend, &ClaudeRulesBackend, &CodexRulesBackend]
+}
+
+struct CursorRulesBackend;
+struct ClaudeRulesBackend;
+struct CodexRulesBackend;
+
+impl RuleBackend for CursorRulesBackend {
+    fn emit(
+        &self,
+        rules: &[crate::tree::RuleNode],
+        ctx: &CompileContext,
+        scope: &str,
+        plan: &mut CompiledPlan,
+    ) {
+        let dest_dir = ctx.project_path.join(".cursor").join("rules");
+        plan.push(FsOp::MkdirP {
+            path: dest_dir.clone(),
+        });
+
+        for r in rules {
+            let display = cursor_display_name(&r.name);
+            let dest = dest_dir.join(format!("{scope}--{display}"));
+            let link_kind = if ctx.force_copy_for_rules {
+                LinkKind::Copy
+            } else {
+                LinkKind::HardLink
+            };
+            emit_rule_body(plan, AgentId::Cursor, link_kind, dest, &r.body);
         }
     }
 }
 
-fn emit_claude_rules(
-    rules: &[crate::tree::RuleNode],
-    ctx: &CompileContext,
-    scope: &str,
-    plan: &mut CompiledPlan,
-) {
-    let dest_dir = ctx.project_path.join(".claude").join("rules");
-    plan.push(FsOp::MkdirP { path: dest_dir.clone() });
+impl RuleBackend for ClaudeRulesBackend {
+    fn emit(
+        &self,
+        rules: &[crate::tree::RuleNode],
+        ctx: &CompileContext,
+        scope: &str,
+        plan: &mut CompiledPlan,
+    ) {
+        let dest_dir = ctx.project_path.join(".claude").join("rules");
+        plan.push(FsOp::MkdirP {
+            path: dest_dir.clone(),
+        });
 
-    for r in rules {
-        let base = r.name.trim_end_matches(".md").trim_end_matches(".mdc");
-        let dest = dest_dir.join(format!("{scope}--{base}.md"));
-        match &r.body {
-            RuleBody::Inline(text) => {
-                plan.push(FsOp::WriteFile {
-                    path: dest,
-                    overwrite: false,
-                    content: text.clone(),
-                });
-            }
-            RuleBody::Source(src) => {
-                plan.push(FsOp::Link(PlannedLink {
-                    agent: AgentId::ClaudeCode,
-                    kind: LinkKind::Symlink,
-                    source: src.clone(),
-                    dest,
-                }));
-            }
+        for r in rules {
+            let base = r.name.trim_end_matches(".md").trim_end_matches(".mdc");
+            let dest = dest_dir.join(format!("{scope}--{base}.md"));
+            emit_rule_body(plan, AgentId::ClaudeCode, LinkKind::Symlink, dest, &r.body);
         }
     }
 }
 
-fn emit_codex_rules(
-    rules: &[crate::tree::RuleNode],
-    ctx: &CompileContext,
-    scope: &str,
-    plan: &mut CompiledPlan,
-) {
-    // Codex binds a single AGENTS.md at the repo root. Prefer a rule literally named
-    // `agents` in the project scope, then in the global scope.
-    if scope != "global" && scope != ctx.project_key {
-        return;
-    }
-    if let Some(r) = rules.iter().find(|r| r.name.starts_with("agents.")) {
+impl RuleBackend for CodexRulesBackend {
+    fn emit(
+        &self,
+        rules: &[crate::tree::RuleNode],
+        ctx: &CompileContext,
+        scope: &str,
+        plan: &mut CompiledPlan,
+    ) {
+        // Codex binds a single AGENTS.md at the repo root. Prefer a rule literally named
+        // `agents` in the project scope, then in the global scope.
+        if scope != "global" && scope != ctx.project_key {
+            return;
+        }
+        let Some(r) = rules.iter().find(|r| r.name.starts_with("agents.")) else {
+            return;
+        };
         let dest = ctx.project_path.join("AGENTS.md");
-        match &r.body {
-            RuleBody::Inline(text) => plan.push(FsOp::WriteFile {
-                path: dest,
-                overwrite: false,
-                content: text.clone(),
-            }),
-            RuleBody::Source(src) => plan.push(FsOp::Link(PlannedLink {
-                agent: AgentId::Codex,
-                kind: LinkKind::Symlink,
-                source: src.clone(),
-                dest,
-            })),
-        }
+        emit_rule_body(plan, AgentId::Codex, LinkKind::Symlink, dest, &r.body);
+    }
+}
+
+/// Shared emission for inline vs linked rule bodies.
+fn emit_rule_body(
+    plan: &mut CompiledPlan,
+    agent: AgentId,
+    link_kind: LinkKind,
+    dest: PathBuf,
+    body: &RuleBody,
+) {
+    match body {
+        RuleBody::Inline(text) => plan.push(FsOp::WriteFile {
+            path: dest,
+            overwrite: false,
+            content: text.clone(),
+        }),
+        RuleBody::Source(src) => plan.push(FsOp::Link(PlannedLink {
+            agent,
+            kind: link_kind,
+            source: src.clone(),
+            dest,
+        })),
     }
 }
 
