@@ -2,22 +2,31 @@
 //!
 //! `CompiledPlan` is a list of [`FsOp`] values describing the exact filesystem operations an IO
 //! layer should perform. This module itself never touches disk.
+//!
+//! ## Profiles
+//!
+//! [`crate::tree::AgentsTree::ProfileDef`] registers a reusable bundle (`extends` + children).
+//! [`crate::tree::ScopeKind::Profile`] scopes merge that bundle (base → tip, then local children)
+//! and emit with the `profile--{id}` rule prefix.
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use thiserror::Error;
 
+use crate::id::{ProfileId, ProjectKey};
 use crate::model::{cursor_display_name, AgentId, LinkKind, PlannedLink};
-use crate::tree::{AgentsTree, RuleBody, SettingsBody, SkillBody};
+use crate::tree::{AgentsTree, RuleBody, ScopeKind, SettingsBody, SkillBody};
 
 /// Context the compiler uses to resolve destinations relative to a project root.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CompileContext {
     pub project_path: PathBuf,
-    /// Project key used for Cursor rule scope prefixes.
-    pub project_key: String,
+    /// Project key used for Cursor rule scope prefixes and Codex `AGENTS.md` selection.
+    pub project_key: ProjectKey,
     /// When true, the compiler will emit copies instead of hard links for the rule rewrite.
     /// Useful for dry-runs and for filesystems that don't support hard links.
     #[serde(default)]
@@ -25,7 +34,7 @@ pub struct CompileContext {
 }
 
 impl CompileContext {
-    pub fn new(project_path: impl Into<PathBuf>, project_key: impl Into<String>) -> Self {
+    pub fn new(project_path: impl Into<PathBuf>, project_key: impl Into<ProjectKey>) -> Self {
         Self {
             project_path: project_path.into(),
             project_key: project_key.into(),
@@ -59,7 +68,18 @@ fn default_overwrite() -> bool {
 pub enum CompileError {
     #[error("duplicate destination in plan: {0}")]
     DuplicateDest(PathBuf),
+    #[error("duplicate profile id: {0}")]
+    DuplicateProfileId(ProfileId),
+    #[error("unknown profile id: {0}")]
+    ProfileNotFound(ProfileId),
+    #[error("cyclic profile inheritance involving {0}")]
+    ProfileCycle(ProfileId),
+    #[error("profile {0} contains nested scopes; use only rules/skills/settings/mcp/text leaves")]
+    InvalidProfileChildren(ProfileId),
 }
+
+/// Map of [`ProfileId`] → merged leaf children (after resolving `extends`).
+pub type ProfileRegistry = HashMap<ProfileId, Vec<AgentsTree>>;
 
 /// Output of [`compile`]. Ordering is deterministic within each scope.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -88,8 +108,9 @@ impl CompiledPlan {
 
 /// Compile a tree into a plan. Pure.
 pub fn compile(tree: &AgentsTree, ctx: &CompileContext) -> Result<CompiledPlan, CompileError> {
+    let registry = build_profile_registry(tree)?;
     let mut plan = CompiledPlan::default();
-    compile_node(tree, ctx, "global", &mut plan)?;
+    compile_node(tree, ctx, "global", &registry, &mut plan)?;
     // Deduplicate by (source, dest) so two scopes producing the same op collapse.
     let mut seen: Vec<(PathBuf, PathBuf)> = Vec::new();
     plan.ops.retain(|op| match op {
@@ -107,16 +128,214 @@ pub fn compile(tree: &AgentsTree, ctx: &CompileContext) -> Result<CompiledPlan, 
     Ok(plan)
 }
 
+fn build_profile_registry(tree: &AgentsTree) -> Result<ProfileRegistry, CompileError> {
+    let mut raw: HashMap<ProfileId, (Vec<ProfileId>, Vec<AgentsTree>)> = HashMap::new();
+    collect_profile_defs(tree, &mut raw)?;
+
+    let mut registry = ProfileRegistry::new();
+    for (id, (_extends, _children)) in raw.iter() {
+        let merged = resolve_profile_merged(id, &raw, &mut HashSet::new())?;
+        registry.insert(id.clone(), merged);
+    }
+    Ok(registry)
+}
+
+fn collect_profile_defs(
+    node: &AgentsTree,
+    out: &mut HashMap<ProfileId, (Vec<ProfileId>, Vec<AgentsTree>)>,
+) -> Result<(), CompileError> {
+    match node {
+        AgentsTree::ProfileDef { id, extends, children } => {
+            validate_profile_def_children(id, children)?;
+            if out
+                .insert(id.clone(), (extends.clone(), children.clone()))
+                .is_some()
+            {
+                return Err(CompileError::DuplicateProfileId(id.clone()));
+            }
+        }
+        AgentsTree::Scope { children, .. } => {
+            for c in children {
+                collect_profile_defs(c, out)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_profile_def_children(id: &ProfileId, children: &[AgentsTree]) -> Result<(), CompileError> {
+    for c in children {
+        match c {
+            AgentsTree::Rules(_)
+            | AgentsTree::Skills(_)
+            | AgentsTree::Settings(_)
+            | AgentsTree::Mcp(_)
+            | AgentsTree::TextFile { .. } => {}
+            AgentsTree::Scope { .. } | AgentsTree::ProfileDef { .. } => {
+                return Err(CompileError::InvalidProfileChildren(id.clone()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_profile_merged(
+    id: &ProfileId,
+    raw: &HashMap<ProfileId, (Vec<ProfileId>, Vec<AgentsTree>)>,
+    visiting: &mut HashSet<ProfileId>,
+) -> Result<Vec<AgentsTree>, CompileError> {
+    if !visiting.insert(id.clone()) {
+        return Err(CompileError::ProfileCycle(id.clone()));
+    }
+    let (extends, own) = raw
+        .get(id)
+        .ok_or_else(|| CompileError::ProfileNotFound(id.clone()))?
+        .clone();
+
+    let mut merged: Vec<AgentsTree> = Vec::new();
+    for base in extends {
+        let layer = resolve_profile_merged(&base, raw, visiting)?;
+        merged = merge_scope_children(&merged, &layer);
+    }
+    merged = merge_scope_children(&merged, &own);
+    let _ = visiting.remove(id);
+    Ok(merged)
+}
+
+/// Merge leaf bundles: later `right` overrides earlier `left` by key (rule name, skill name, etc.).
+fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<AgentsTree> {
+    let mut rules: HashMap<String, crate::tree::RuleNode> = HashMap::new();
+    let mut skills: HashMap<String, crate::tree::SkillNode> = HashMap::new();
+    let mut settings: HashMap<(AgentId, String), crate::tree::SettingsNode> = HashMap::new();
+    let mut mcp_layers: Vec<Value> = Vec::new();
+    let mut text: HashMap<String, String> = HashMap::new();
+
+    fn ingest(
+        node: &AgentsTree,
+        rules: &mut HashMap<String, crate::tree::RuleNode>,
+        skills: &mut HashMap<String, crate::tree::SkillNode>,
+        settings: &mut HashMap<(AgentId, String), crate::tree::SettingsNode>,
+        mcp_layers: &mut Vec<Value>,
+        text: &mut HashMap<String, String>,
+    ) {
+        match node {
+            AgentsTree::Rules(rs) => {
+                for r in rs {
+                    rules.insert(r.name.clone(), r.clone());
+                }
+            }
+            AgentsTree::Skills(ss) => {
+                for s in ss {
+                    skills.insert(s.name.clone(), s.clone());
+                }
+            }
+            AgentsTree::Settings(st) => {
+                for s in st {
+                    settings.insert((s.agent, s.file_name.clone()), s.clone());
+                }
+            }
+            AgentsTree::Mcp(v) => mcp_layers.push(v.clone()),
+            AgentsTree::TextFile { name, body } => {
+                text.insert(name.clone(), body.clone());
+            }
+            AgentsTree::Scope { .. } | AgentsTree::ProfileDef { .. } => {}
+        }
+    }
+
+    for n in left {
+        ingest(n, &mut rules, &mut skills, &mut settings, &mut mcp_layers, &mut text);
+    }
+    for n in right {
+        ingest(n, &mut rules, &mut skills, &mut settings, &mut mcp_layers, &mut text);
+    }
+
+    let mut out: Vec<AgentsTree> = Vec::new();
+    let mut rule_names: Vec<_> = rules.keys().cloned().collect();
+    rule_names.sort();
+    if !rule_names.is_empty() {
+        out.push(AgentsTree::Rules(
+            rule_names.into_iter().map(|k| rules.remove(&k).unwrap()).collect(),
+        ));
+    }
+    let mut skill_names: Vec<_> = skills.keys().cloned().collect();
+    skill_names.sort();
+    if !skill_names.is_empty() {
+        out.push(AgentsTree::Skills(
+            skill_names.into_iter().map(|k| skills.remove(&k).unwrap()).collect(),
+        ));
+    }
+    let mut setting_keys: Vec<_> = settings.keys().cloned().collect();
+    setting_keys.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()).then_with(|| a.1.cmp(&b.1)));
+    if !setting_keys.is_empty() {
+        out.push(AgentsTree::Settings(
+            setting_keys
+                .into_iter()
+                .map(|k| settings.remove(&k).unwrap())
+                .collect(),
+        ));
+    }
+    if !mcp_layers.is_empty() {
+        let merged_mcp = mcp_layers
+            .into_iter()
+            .reduce(|a, b| merge_json_objects(&a, &b))
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        out.push(AgentsTree::Mcp(merged_mcp));
+    }
+    let mut text_names: Vec<_> = text.keys().cloned().collect();
+    text_names.sort();
+    for name in text_names {
+        let body = text.remove(&name).unwrap();
+        out.push(AgentsTree::TextFile { name, body });
+    }
+    out
+}
+
+fn merge_json_objects(a: &Value, b: &Value) -> Value {
+    match (a, b) {
+        (Value::Object(am), Value::Object(bm)) => {
+            let mut out = am.clone();
+            for (k, v) in bm.iter() {
+                match out.get_mut(k) {
+                    Some(old) => *old = merge_json_objects(old, v),
+                    None => {
+                        out.insert(k.clone(), v.clone());
+                    }
+                }
+            }
+            Value::Object(out)
+        }
+        (_, b) => b.clone(),
+    }
+}
+
 fn compile_node(
     node: &AgentsTree,
     ctx: &CompileContext,
     current_scope: &str,
+    registry: &ProfileRegistry,
     plan: &mut CompiledPlan,
 ) -> Result<(), CompileError> {
     match node {
-        AgentsTree::Scope { name, children } => {
-            for c in children {
-                compile_node(c, ctx, name, plan)?;
+        AgentsTree::ProfileDef { .. } => {
+            // Registered at build time; emission happens from Profile scopes or extends.
+        }
+        AgentsTree::Scope { kind, children } => {
+            let prefix = kind.rule_prefix();
+            if let ScopeKind::Profile { id } = kind {
+                let inherited = registry
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_default();
+                let local: Vec<AgentsTree> = children.to_vec();
+                let effective = merge_scope_children(&inherited, &local);
+                for c in &effective {
+                    compile_node(c, ctx, &prefix, registry, plan)?;
+                }
+            } else {
+                for c in children {
+                    compile_node(c, ctx, &prefix, registry, plan)?;
+                }
             }
         }
         AgentsTree::Rules(rules) => {
@@ -220,7 +439,7 @@ impl RuleBackend for CodexRulesBackend {
     ) {
         // Codex binds a single AGENTS.md at the repo root. Prefer a rule literally named
         // `agents` in the project scope, then in the global scope.
-        if scope != "global" && scope != ctx.project_key {
+        if scope != "global" && scope != ctx.project_key.as_str() {
             return;
         }
         let Some(r) = rules.iter().find(|r| r.name.starts_with("agents.")) else {

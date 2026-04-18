@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use agentz_core::compile::{compile, CompileContext, FsOp};
 use agentz_core::model::{AgentId, LinkKind};
+use agentz_core::ProfileId;
 use agentz_core::tree::{AgentsTree, RuleBody, RuleNode, SettingsBody, SettingsNode, SkillBody, SkillNode};
 
 fn project() -> PathBuf {
@@ -135,22 +136,19 @@ fn tree_compiles_source_rules_as_hardlink_for_cursor_and_symlink_for_claude() {
 
 #[test]
 fn project_scope_overrides_global_with_project_prefix() {
-    let tree = AgentsTree::Scope {
-        name: "root".into(),
-        children: vec![
-            AgentsTree::global([AgentsTree::Rules(vec![RuleNode {
+    let tree = AgentsTree::global([
+        AgentsTree::Rules(vec![RuleNode {
+            name: "shared.md".into(),
+            body: RuleBody::Inline("global\n".into()),
+        }]),
+        AgentsTree::project(
+            "demo",
+            [AgentsTree::Rules(vec![RuleNode {
                 name: "shared.md".into(),
-                body: RuleBody::Inline("global\n".into()),
-            }])]),
-            AgentsTree::project(
-                "demo",
-                [AgentsTree::Rules(vec![RuleNode {
-                    name: "shared.md".into(),
-                    body: RuleBody::Inline("project\n".into()),
-                }])],
-            ),
-        ],
-    };
+                body: RuleBody::Inline("project\n".into()),
+            }])],
+        ),
+    ]);
     let ctx = CompileContext::new(project(), "demo");
     let plan = compile(&tree, &ctx).unwrap();
 
@@ -161,4 +159,58 @@ fn project_scope_overrides_global_with_project_prefix() {
     assert!(plan.ops.iter().any(|op| matches!(op,
         FsOp::WriteFile { path, .. }
             if path == &project().join(".cursor/rules/demo--shared.mdc"))));
+}
+
+#[test]
+fn profile_scope_inherits_base_and_overrides_rules() {
+    let tree = AgentsTree::global([
+        AgentsTree::profile_def(
+            "base",
+            [],
+            [AgentsTree::Rules(vec![RuleNode {
+                name: "010-a.md".into(),
+                body: RuleBody::Inline("from base\n".into()),
+            }])],
+        ),
+        AgentsTree::profile_def(
+            "derived",
+            [ProfileId::from("base")],
+            [AgentsTree::Rules(vec![RuleNode {
+                name: "010-a.md".into(),
+                body: RuleBody::Inline("from derived\n".into()),
+            }])],
+        ),
+        AgentsTree::profile("derived", []),
+    ]);
+    let ctx = CompileContext::new(project(), "demo");
+    let plan = compile(&tree, &ctx).unwrap();
+
+    let cursor = plan.ops.iter().find_map(|op| match op {
+        FsOp::WriteFile { path, content, .. }
+            if path == &project().join(".cursor/rules/profile--derived--010-a.mdc") =>
+        {
+            Some(content.as_str())
+        }
+        _ => None,
+    });
+    assert_eq!(cursor, Some("from derived\n"));
+}
+
+#[test]
+fn nested_workstream_scope_uses_ws_prefix() {
+    let tree = AgentsTree::global([AgentsTree::project(
+        "demo",
+        [AgentsTree::workstream(
+            "feat-auth",
+            [AgentsTree::Rules(vec![RuleNode {
+                name: "ws-rule.md".into(),
+                body: RuleBody::Inline("ws\n".into()),
+            }])],
+        )],
+    )]);
+    let ctx = CompileContext::new(project(), "demo");
+    let plan = compile(&tree, &ctx).unwrap();
+    assert!(plan.ops.iter().any(|op| matches!(op,
+        FsOp::WriteFile { path, .. }
+            if path == &project().join(".cursor/rules/ws--feat-auth--ws-rule.mdc"))));
 }

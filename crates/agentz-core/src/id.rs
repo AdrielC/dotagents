@@ -34,3 +34,6 @@ StepId);
 
 id_newtype!(/// Stable identifier for a project key (the bucket under `rules/<project>/`, etc.).
 ProjectKey);
+
+id_newtype!(/// Stable identifier for a reusable **profile** bundle (rules/skills/settings merged with [`crate::tree::ScopeKind::Profile`] inheritance).
+ProfileId);

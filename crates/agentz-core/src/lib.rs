@@ -11,7 +11,7 @@
 //! | [`id`] | Stable identifiers ([`WorkstreamId`](id::WorkstreamId), [`StepId`](id::StepId), etc.). |
 //! | [`model`] | Per-agent types: [`AgentId`](model::AgentId), [`LinkKind`](model::LinkKind), [`PlannedLink`](model::PlannedLink), [`CursorRuleNaming`](model::CursorRuleNaming). |
 //! | [`workstream`] | [`WorkstreamDescriptor`](workstream::WorkstreamDescriptor) + kind taxonomy. |
-//! | [`tree`] | Recursive **AgentsTree** AST (the pure shape of `~/.agents`). |
+//! | [`tree`] | Recursive **AgentsTree** AST + [`ScopeKind`](tree::ScopeKind) (global, project, workstream, profile). |
 //! | [`plan`] | Pure [`Plan`](plan::Plan) DAG of steps (objective + [`Step`](plan::Step) + edges). |
 //! | [`compile`] | Fold `(AgentsTree, Context)` → [`CompiledPlan`](compile::CompiledPlan) of [`FsOp`](compile::FsOp)s. |
 //! | [`schema`] | `schemars`-backed plugin schema types and registry. |
@@ -31,14 +31,14 @@ pub mod tree;
 pub mod vocabulary;
 pub mod workstream;
 
-pub use compile::{CompileContext, CompileError, CompiledPlan, FsOp};
-pub use id::{StepId, WorkstreamId};
+pub use compile::{CompileContext, CompileError, CompiledPlan, FsOp, ProfileRegistry};
+pub use id::{ProfileId, ProjectKey, StepId, WorkstreamId};
 pub use model::{cursor_display_name, AgentId, CursorRuleNaming, LinkKind, PlannedLink};
 pub use plan::{Dag, DagError, Objective, Plan, Step, StepKind, StepStatus};
 pub use plugins::{InstallContext, ProjectLinker};
 pub use schema::{
     PluginSchemaEntry, PluginSchemaRegistry, PluginsSection, SchemaError,
 };
-pub use tree::{AgentsTree, RuleNode, SettingsNode, SkillNode};
+pub use tree::{AgentsTree, RuleNode, ScopeKind, SettingsNode, SkillNode};
 pub use vocabulary::{install_context, json_ld_install_report, SCHEMA_ORG};
 pub use workstream::{WorkstreamDescriptor, WorkstreamKind};

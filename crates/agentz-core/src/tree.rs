@@ -6,19 +6,31 @@
 //! plan to produce real files.
 //!
 //! ```text
-//! AgentsTree::Scope { name: "global", children: [
-//!     AgentsTree::Rules(vec![RuleNode { name: "rules.mdc", body: RuleBody::Inline(".."). }]),
-//!     AgentsTree::Skills(vec![SkillNode { name: "test-writer", body: ".." }]),
-//!     AgentsTree::Settings(vec![SettingsNode { agent: AgentId::Cursor, path: "cursor.json" }]),
-//!     AgentsTree::Mcp(serde_json::json!({ "servers": { .. } })),
-//! ]}
+//! AgentsTree::Scope {
+//!     kind: ScopeKind::Global,
+//!     children: vec![
+//!         AgentsTree::Rules(vec![RuleNode { name: "rules.mdc", body: RuleBody::Inline("..") }]),
+//!         AgentsTree::Skills(vec![SkillNode { name: "test-writer", body: ".." }]),
+//!         AgentsTree::Settings(vec![SettingsNode { agent: AgentId::Cursor, file_name: "cursor.json".into(), .. }]),
+//!         AgentsTree::Mcp(serde_json::json!({ "servers": { .. } })),
+//!     ],
+//! }
 //! ```
+//!
+//! ## Scopes and composition
+//!
+//! [`ScopeKind`] classifies each branch: **global** (user-wide), **project**, **workstream** (slug),
+//! or **profile** (slug + optional `extends` chain). You **nest** scopes by placing
+//! [`AgentsTree::Scope`] nodes inside `children` — e.g. global → project → workstream. **Profiles**
+//! merge inherited profile definitions (see [`ScopeKind::Profile`]) then apply their own leaves on
+//! top (rules/skills/settings/MCP override by key).
 
 use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::id::{ProfileId, ProjectKey, WorkstreamId};
 use crate::model::AgentId;
 
 /// A rule file. `body` is either inline content or an on-disk source the IO layer will hard-link
@@ -71,16 +83,52 @@ pub enum SettingsBody {
     Source(PathBuf),
 }
 
+/// What kind of branch this [`AgentsTree::Scope`] is. Drives filename prefixes and inheritance.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScopeKind {
+    /// User-wide defaults (Cursor/Claude `global--*` prefixes).
+    Global,
+    /// A single project/repo bucket (`{project_key}--*` rule prefixes).
+    Project { key: ProjectKey },
+    /// Per workstream overlay (`ws--{slug}--*`).
+    Workstream { slug: WorkstreamId },
+    /// Named profile (`profile--{id}--*`). Inheritance is defined on [`AgentsTree::ProfileDef`]
+    /// entries in the tree (see registry + [`ProfileRegistry`](crate::compile::ProfileRegistry) in `compile`).
+    Profile { id: ProfileId },
+}
+
+impl ScopeKind {
+    /// Cursor/Claude rule filename prefix segment (before `--{rule-name}`).
+    pub fn rule_prefix(&self) -> String {
+        match self {
+            ScopeKind::Global => "global".into(),
+            ScopeKind::Project { key } => key.as_str().to_string(),
+            ScopeKind::Workstream { slug } => format!("ws--{}", slug.as_str()),
+            ScopeKind::Profile { id, .. } => format!("profile--{}", id.as_str()),
+        }
+    }
+}
+
 /// Recursive `~/.agents` AST.
 ///
 /// `Scope` nodes are the only branch in the tree. Everything else is a leaf that carries typed
-/// content.  A `Scope` is either `"global"` or a project key.
+/// content. Nest scopes under `children` to compose global → project → workstream (or attach
+/// profiles).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum AgentsTree {
-    /// A named scope (`"global"` or a project key) grouping child nodes.
+    /// A typed scope grouping child nodes.
     Scope {
-        name: String,
+        kind: ScopeKind,
+        children: Vec<AgentsTree>,
+    },
+    /// Registered profile bundle (`extends` + children). Placed alongside scopes (often under global).
+    /// Not emitted directly; merged when a [`ScopeKind::Profile`] scope references `id`.
+    ProfileDef {
+        id: ProfileId,
+        #[serde(default)]
+        extends: Vec<ProfileId>,
         children: Vec<AgentsTree>,
     },
     /// A bundle of rule files for this scope.
@@ -96,18 +144,59 @@ pub enum AgentsTree {
 }
 
 impl AgentsTree {
-    /// Build a `global` scope. Handy entry point for fluent construction.
+    /// Build a [`ScopeKind::Global`] scope (user-wide).
     pub fn global(children: impl IntoIterator<Item = AgentsTree>) -> Self {
         AgentsTree::Scope {
-            name: "global".into(),
+            kind: ScopeKind::Global,
             children: children.into_iter().collect(),
         }
     }
 
-    /// Build a named project scope.
-    pub fn project(name: impl Into<String>, children: impl IntoIterator<Item = AgentsTree>) -> Self {
+    /// Build a [`ScopeKind::Project`] scope.
+    pub fn project(key: impl Into<ProjectKey>, children: impl IntoIterator<Item = AgentsTree>) -> Self {
         AgentsTree::Scope {
-            name: name.into(),
+            kind: ScopeKind::Project { key: key.into() },
+            children: children.into_iter().collect(),
+        }
+    }
+
+    /// Build a [`ScopeKind::Workstream`] scope (`ws--{slug}` prefixes).
+    pub fn workstream(slug: impl Into<WorkstreamId>, children: impl IntoIterator<Item = AgentsTree>) -> Self {
+        AgentsTree::Scope {
+            kind: ScopeKind::Workstream {
+                slug: slug.into(),
+            },
+            children: children.into_iter().collect(),
+        }
+    }
+
+    /// Build a [`ScopeKind::Profile`] scope. Merge `extends` and default content via
+    /// [`AgentsTree::profile_def`] nodes registered in the same tree.
+    pub fn profile(id: impl Into<ProfileId>, children: impl IntoIterator<Item = AgentsTree>) -> Self {
+        AgentsTree::Scope {
+            kind: ScopeKind::Profile { id: id.into() },
+            children: children.into_iter().collect(),
+        }
+    }
+
+    /// Register a reusable profile body (for [`ScopeKind::Profile`] and `extends` chains).
+    /// Emits nothing by itself; [`crate::compile::compile`] merges this when resolving profiles.
+    pub fn profile_def(
+        id: impl Into<ProfileId>,
+        extends: impl IntoIterator<Item = ProfileId>,
+        children: impl IntoIterator<Item = AgentsTree>,
+    ) -> Self {
+        AgentsTree::ProfileDef {
+            id: id.into(),
+            extends: extends.into_iter().collect(),
+            children: children.into_iter().collect(),
+        }
+    }
+
+    /// Generic scope constructor.
+    pub fn scope(kind: ScopeKind, children: impl IntoIterator<Item = AgentsTree>) -> Self {
+        AgentsTree::Scope {
+            kind,
             children: children.into_iter().collect(),
         }
     }
@@ -127,11 +216,13 @@ impl<'a> Iterator for TreeWalk<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let node = self.stack.pop()?;
-        if let AgentsTree::Scope { children, .. } = node {
-            // Push right-to-left so we visit left-to-right.
-            for child in children.iter().rev() {
-                self.stack.push(child);
+        match node {
+            AgentsTree::Scope { children, .. } | AgentsTree::ProfileDef { children, .. } => {
+                for child in children.iter().rev() {
+                    self.stack.push(child);
+                }
             }
+            _ => {}
         }
         Some(node)
     }
