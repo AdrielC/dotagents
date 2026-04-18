@@ -34,6 +34,7 @@ pub struct CompileContext {
 }
 
 impl CompileContext {
+    #[must_use]
     pub fn new(project_path: impl Into<PathBuf>, project_key: impl Into<ProjectKey>) -> Self {
         Self {
             project_path: project_path.into(),
@@ -111,21 +112,41 @@ pub fn compile(tree: &AgentsTree, ctx: &CompileContext) -> Result<CompiledPlan, 
     let registry = build_profile_registry(tree)?;
     let mut plan = CompiledPlan::default();
     compile_node(tree, ctx, "global", &registry, &mut plan)?;
-    // Deduplicate by (source, dest) so two scopes producing the same op collapse.
-    let mut seen: Vec<(PathBuf, PathBuf)> = Vec::new();
+    dedup_ops(&mut plan);
+    Ok(plan)
+}
+
+/// Collapse identical operations emitted by overlapping scopes (e.g. nested rules bundles
+/// requesting the same `MkdirP`). Conflicting `WriteFile`s at the same path get a warning; the
+/// first winning content is kept so compilation remains deterministic.
+fn dedup_ops(plan: &mut CompiledPlan) {
+    let mut seen_mkdir: HashSet<PathBuf> = HashSet::new();
+    let mut seen_write: HashMap<PathBuf, String> = HashMap::new();
+    let mut seen_link: HashSet<(PathBuf, PathBuf)> = HashSet::new();
+    let mut conflicts: Vec<PathBuf> = Vec::new();
+
     plan.ops.retain(|op| match op {
-        FsOp::Link(l) => {
-            let key = (l.source.clone(), l.dest.clone());
-            if seen.iter().any(|k| k == &key) {
+        FsOp::MkdirP { path } => seen_mkdir.insert(path.clone()),
+        FsOp::WriteFile { path, content, .. } => match seen_write.get(path) {
+            Some(prev) if prev == content => false,
+            Some(_) => {
+                conflicts.push(path.clone());
                 false
-            } else {
-                seen.push(key);
+            }
+            None => {
+                seen_write.insert(path.clone(), content.clone());
                 true
             }
-        }
-        _ => true,
+        },
+        FsOp::Link(l) => seen_link.insert((l.source.clone(), l.dest.clone())),
     });
-    Ok(plan)
+
+    for path in conflicts {
+        plan.warnings.push(format!(
+            "conflicting WriteFile content for {}; keeping first emission",
+            path.display()
+        ));
+    }
 }
 
 fn build_profile_registry(tree: &AgentsTree) -> Result<ProfileRegistry, CompileError> {
@@ -145,7 +166,11 @@ fn collect_profile_defs(
     out: &mut HashMap<ProfileId, (Vec<ProfileId>, Vec<AgentsTree>)>,
 ) -> Result<(), CompileError> {
     match node {
-        AgentsTree::ProfileDef { id, extends, children } => {
+        AgentsTree::ProfileDef {
+            id,
+            extends,
+            children,
+        } => {
             validate_profile_def_children(id, children)?;
             if out
                 .insert(id.clone(), (extends.clone(), children.clone()))
@@ -164,7 +189,10 @@ fn collect_profile_defs(
     Ok(())
 }
 
-fn validate_profile_def_children(id: &ProfileId, children: &[AgentsTree]) -> Result<(), CompileError> {
+fn validate_profile_def_children(
+    id: &ProfileId,
+    children: &[AgentsTree],
+) -> Result<(), CompileError> {
     for c in children {
         match c {
             AgentsTree::Rules(_)
@@ -244,10 +272,24 @@ fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<Agents
     }
 
     for n in left {
-        ingest(n, &mut rules, &mut skills, &mut settings, &mut mcp_layers, &mut text);
+        ingest(
+            n,
+            &mut rules,
+            &mut skills,
+            &mut settings,
+            &mut mcp_layers,
+            &mut text,
+        );
     }
     for n in right {
-        ingest(n, &mut rules, &mut skills, &mut settings, &mut mcp_layers, &mut text);
+        ingest(
+            n,
+            &mut rules,
+            &mut skills,
+            &mut settings,
+            &mut mcp_layers,
+            &mut text,
+        );
     }
 
     let mut out: Vec<AgentsTree> = Vec::new();
@@ -255,14 +297,20 @@ fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<Agents
     rule_names.sort();
     if !rule_names.is_empty() {
         out.push(AgentsTree::Rules(
-            rule_names.into_iter().map(|k| rules.remove(&k).unwrap()).collect(),
+            rule_names
+                .into_iter()
+                .map(|k| rules.remove(&k).unwrap())
+                .collect(),
         ));
     }
     let mut skill_names: Vec<_> = skills.keys().cloned().collect();
     skill_names.sort();
     if !skill_names.is_empty() {
         out.push(AgentsTree::Skills(
-            skill_names.into_iter().map(|k| skills.remove(&k).unwrap()).collect(),
+            skill_names
+                .into_iter()
+                .map(|k| skills.remove(&k).unwrap())
+                .collect(),
         ));
     }
     let mut setting_keys: Vec<_> = settings.keys().cloned().collect();
@@ -323,10 +371,7 @@ fn compile_node(
         AgentsTree::Scope { kind, children } => {
             let prefix = kind.rule_prefix();
             if let ScopeKind::Profile { id } = kind {
-                let inherited = registry
-                    .get(id)
-                    .cloned()
-                    .unwrap_or_default();
+                let inherited = registry.get(id).cloned().unwrap_or_default();
                 let local: Vec<AgentsTree> = children.to_vec();
                 let effective = merge_scope_children(&inherited, &local);
                 for c in &effective {
@@ -473,13 +518,23 @@ fn emit_rule_body(
     }
 }
 
-fn emit_skill_commands(skills: &[crate::tree::SkillNode], ctx: &CompileContext, plan: &mut CompiledPlan) {
+fn emit_skill_commands(
+    skills: &[crate::tree::SkillNode],
+    ctx: &CompileContext,
+    plan: &mut CompiledPlan,
+) {
     let cursor_dir = ctx.project_path.join(".cursor").join("commands");
     let claude_dir = ctx.project_path.join(".claude").join("skills");
     let codex_dir = ctx.project_path.join(".codex").join("skills");
-    plan.push(FsOp::MkdirP { path: cursor_dir.clone() });
-    plan.push(FsOp::MkdirP { path: claude_dir.clone() });
-    plan.push(FsOp::MkdirP { path: codex_dir.clone() });
+    plan.push(FsOp::MkdirP {
+        path: cursor_dir.clone(),
+    });
+    plan.push(FsOp::MkdirP {
+        path: claude_dir.clone(),
+    });
+    plan.push(FsOp::MkdirP {
+        path: codex_dir.clone(),
+    });
 
     for s in skills {
         match &s.body {
@@ -525,20 +580,20 @@ fn emit_skill_commands(skills: &[crate::tree::SkillNode], ctx: &CompileContext, 
     }
 }
 
-fn emit_settings(settings: &[crate::tree::SettingsNode], ctx: &CompileContext, plan: &mut CompiledPlan) {
+fn emit_settings(
+    settings: &[crate::tree::SettingsNode],
+    ctx: &CompileContext,
+    plan: &mut CompiledPlan,
+) {
     for s in settings {
-        let dest = match s.agent {
-            AgentId::Cursor => ctx.project_path.join(".cursor").join(&s.file_name),
-            AgentId::ClaudeCode => ctx.project_path.join(".claude").join(&s.file_name),
-            AgentId::Codex => ctx.project_path.join(".codex").join(&s.file_name),
-            AgentId::OpenCode => ctx.project_path.join(".opencode").join(&s.file_name),
-            AgentId::Gemini => ctx.project_path.join(".gemini").join(&s.file_name),
-            AgentId::Factory => ctx.project_path.join(".factory").join(&s.file_name),
-            AgentId::Github => ctx.project_path.join(".github").join(&s.file_name),
-            AgentId::Ampcode => ctx.project_path.join(".ampcode").join(&s.file_name),
-        };
+        let dest = ctx
+            .project_path
+            .join(s.agent.config_dir())
+            .join(&s.file_name);
         if let Some(parent) = dest.parent() {
-            plan.push(FsOp::MkdirP { path: parent.to_path_buf() });
+            plan.push(FsOp::MkdirP {
+                path: parent.to_path_buf(),
+            });
         }
         match &s.body {
             SettingsBody::Empty => plan.push(FsOp::WriteFile {

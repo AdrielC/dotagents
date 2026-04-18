@@ -42,7 +42,8 @@ pub fn read_config(path: &Path) -> std::io::Result<AgentsConfig> {
     let overlay: Value = serde_json::from_str(&text)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     merge_json(&mut base, overlay);
-    serde_json::from_value(base).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    serde_json::from_value(base)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 pub fn write_config(path: &Path, config: &AgentsConfig) -> std::io::Result<()> {

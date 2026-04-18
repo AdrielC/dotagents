@@ -34,6 +34,23 @@ impl AgentId {
         }
     }
 
+    /// Project-relative dot-directory name where this agent's config lives, without the leading dot.
+    ///
+    /// This is *not* always `as_str()`: Claude Code's marker is `claude-code` but its directory is
+    /// `.claude`. Returned as a plain `&str` so callers can join it with any path type.
+    pub fn config_dir(self) -> &'static str {
+        match self {
+            AgentId::Cursor => ".cursor",
+            AgentId::ClaudeCode => ".claude",
+            AgentId::Codex => ".codex",
+            AgentId::OpenCode => ".opencode",
+            AgentId::Gemini => ".gemini",
+            AgentId::Factory => ".factory",
+            AgentId::Github => ".github",
+            AgentId::Ampcode => ".ampcode",
+        }
+    }
+
     pub fn all() -> &'static [AgentId] {
         &[
             AgentId::Cursor,

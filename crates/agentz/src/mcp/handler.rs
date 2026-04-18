@@ -46,13 +46,7 @@ impl PluginMcpServer {
 
     /// Serve over a generic async read/write pair. Use this to expose the server over a
     /// Zenoh duplex, a unix pipe, or any other [`AsyncRead`] + [`AsyncWrite`] transport.
-    /// Serve over a generic async read/write pair. Use this to expose the server over a
-    /// Zenoh duplex, a unix pipe, or any other [`AsyncRead`] + [`AsyncWrite`] transport.
-    pub async fn serve_transport<R, W>(
-        self,
-        read: R,
-        write: W,
-    ) -> Result<(), rmcp::RmcpError>
+    pub async fn serve_transport<R, W>(self, read: R, write: W) -> Result<(), rmcp::RmcpError>
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,

@@ -33,7 +33,10 @@ fn compile_then_apply_produces_real_files() {
 
     let report = apply_plan(
         &plan,
-        &ApplyOptions { force: true, dry_run: false },
+        &ApplyOptions {
+            force: true,
+            dry_run: false,
+        },
     )
     .unwrap();
 

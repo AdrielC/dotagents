@@ -3,8 +3,9 @@
 //!
 //! The server is intentionally small: one handler with tools named after the plugin lifecycle.
 //! It is transport-agnostic — use [`run_stdio`] for the conventional stdio transport, or pipe
-//! any [`tokio::io::AsyncRead`] + [`tokio::io::AsyncWrite`] pair via [`PluginMcpServer::serve`]
-//! to reach the same handler from a [Zenoh duplex](crate::zenoh::ZenohDuplex) or a test pipe.
+//! any [`tokio::io::AsyncRead`] + [`tokio::io::AsyncWrite`] pair via
+//! [`PluginMcpServer::serve_transport`] to reach the same handler from a Zenoh duplex
+//! (`crate::zenoh_bus::ZenohDuplex`, behind the `zenoh-bus` feature) or a test pipe.
 
 mod handler;
 mod tools;

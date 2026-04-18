@@ -5,26 +5,25 @@
 //! DAG guarantees a deterministic topological order.
 //!
 //! ```
-//! use agentz_core::plan::{Dag, Objective, Plan, Step, StepKind};
-//! use agentz_core::id::StepId;
+//! use agentz_core::plan::{Dag, DagError, Objective, Plan, Step, StepKind};
 //!
-//! let install = Step::new("install", "install agent links", StepKind::Install { project_key: "demo".into() });
-//! let compile = Step::new("compile", "compile agent tree", StepKind::Compile);
-//! let commit  = Step::new("commit",  "commit config",       StepKind::Shell { command: "git commit -am wip".into() });
+//! fn build() -> Result<Plan, DagError> {
+//!     let install = Step::new("install", "install agent links", StepKind::Install { project_key: "demo".into() });
+//!     let compile = Step::new("compile", "compile agent tree", StepKind::Compile);
+//!     let commit  = Step::new("commit",  "commit config",       StepKind::Shell { command: "git commit -am wip".into() });
 //!
-//! let mut dag = Dag::new();
-//! dag.add(compile.clone());
-//! dag.add(install.clone());
-//! dag.add(commit.clone());
-//! dag.edge(&compile.id, &install.id);      // compile -> install
-//! dag.edge(&install.id, &commit.id);       // install -> commit
+//!     let mut dag = Dag::new();
+//!     dag.add(compile.clone())?;
+//!     dag.add(install.clone())?;
+//!     dag.add(commit.clone())?;
+//!     dag.edge(&compile.id, &install.id)?; // compile -> install
+//!     dag.edge(&install.id, &commit.id)?;  // install -> commit
+//!     Ok(Plan { objective: Objective::new("ship the feature"), dag })
+//! }
 //!
-//! let order = dag.topo().unwrap();
-//! assert_eq!(order[0].as_str(), "compile");
-//! let plan = Plan {
-//!     objective: Objective::new("ship the feature"),
-//!     dag,
-//! };
+//! let plan = build().unwrap();
+//! let order = plan.topo().unwrap();
+//! assert_eq!(order[0].id.as_str(), "compile");
 //! assert_eq!(plan.objective.summary, "ship the feature");
 //! ```
 
@@ -48,15 +47,22 @@ pub struct Objective {
 }
 
 impl Objective {
+    #[must_use]
     pub fn new(summary: impl Into<String>) -> Self {
-        Self { summary: summary.into(), acceptance: None, tags: Vec::new() }
+        Self {
+            summary: summary.into(),
+            acceptance: None,
+            tags: Vec::new(),
+        }
     }
 
+    #[must_use]
     pub fn with_acceptance(mut self, acceptance: impl Into<String>) -> Self {
         self.acceptance = Some(acceptance.into());
         self
     }
 
+    #[must_use]
     pub fn with_tags<S: Into<String>>(mut self, tags: impl IntoIterator<Item = S>) -> Self {
         self.tags = tags.into_iter().map(Into::into).collect();
         self
@@ -85,9 +91,15 @@ pub enum StepKind {
     /// Install the compiled links for a project.
     Install { project_key: String },
     /// Invoke a plugin by id with a JSON payload.
-    Plugin { id: String, payload: serde_json::Value },
+    Plugin {
+        id: String,
+        payload: serde_json::Value,
+    },
     /// Call an MCP tool hosted by the runtime.
-    McpTool { tool: String, arguments: serde_json::Value },
+    McpTool {
+        tool: String,
+        arguments: serde_json::Value,
+    },
     /// Dispatch a prompt to the per-workstream agent (ACP).
     AgentPrompt { agent: AgentId, prompt: String },
     /// Shell command (runtime decides whether it is allowed).
@@ -109,6 +121,7 @@ pub struct Step {
 }
 
 impl Step {
+    #[must_use]
     pub fn new(id: impl Into<String>, title: impl Into<String>, kind: StepKind) -> Self {
         Self {
             id: StepId::new(id),
@@ -139,6 +152,7 @@ pub struct Dag {
 }
 
 impl Dag {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -161,7 +175,10 @@ impl Dag {
         if !self.steps.contains_key(to) {
             return Err(DagError::Unknown(to.0.clone()));
         }
-        self.edges.entry(from.clone()).or_default().insert(to.clone());
+        self.edges
+            .entry(from.clone())
+            .or_default()
+            .insert(to.clone());
         Ok(())
     }
 
@@ -216,8 +233,12 @@ pub struct Plan {
 }
 
 impl Plan {
+    #[must_use]
     pub fn new(objective: Objective) -> Self {
-        Self { objective, dag: Dag::new() }
+        Self {
+            objective,
+            dag: Dag::new(),
+        }
     }
 
     pub fn topo(&self) -> Result<Vec<&Step>, DagError> {

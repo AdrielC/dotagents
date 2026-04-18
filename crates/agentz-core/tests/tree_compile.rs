@@ -9,11 +9,13 @@ use std::path::PathBuf;
 
 use agentz_core::compile::{compile, CompileContext, FsOp};
 use agentz_core::model::{AgentId, LinkKind};
+use agentz_core::tree::{
+    AgentsTree, RuleBody, RuleNode, SettingsBody, SettingsNode, SkillBody, SkillNode,
+};
 use agentz_core::ProfileId;
 use agentz_core::WorkstreamId;
 use agentz_core::WorkstreamKind;
 use uuid::Uuid;
-use agentz_core::tree::{AgentsTree, RuleBody, RuleNode, SettingsBody, SettingsNode, SkillBody, SkillNode};
 
 fn project() -> PathBuf {
     PathBuf::from("/workspace/demo")
@@ -127,14 +129,20 @@ fn tree_compiles_source_rules_as_hardlink_for_cursor_and_symlink_for_claude() {
         .find(|l| l.agent == AgentId::Cursor)
         .expect("cursor link");
     assert_eq!(cursor_link.kind, LinkKind::HardLink);
-    assert_eq!(cursor_link.dest, project().join(".cursor/rules/global--hello.mdc"));
+    assert_eq!(
+        cursor_link.dest,
+        project().join(".cursor/rules/global--hello.mdc")
+    );
 
     let claude_link = plan
         .links()
         .find(|l| l.agent == AgentId::ClaudeCode)
         .expect("claude link");
     assert_eq!(claude_link.kind, LinkKind::Symlink);
-    assert_eq!(claude_link.dest, project().join(".claude/rules/global--hello.md"));
+    assert_eq!(
+        claude_link.dest,
+        project().join(".claude/rules/global--hello.md")
+    );
 }
 
 #[test]
@@ -197,6 +205,68 @@ fn profile_scope_inherits_base_and_overrides_rules() {
         _ => None,
     });
     assert_eq!(cursor, Some("from derived\n"));
+}
+
+#[test]
+fn identical_writes_from_overlapping_scopes_are_deduped() {
+    let tree = AgentsTree::global([
+        AgentsTree::Rules(vec![RuleNode {
+            name: "shared.md".into(),
+            body: RuleBody::Inline("same\n".into()),
+        }]),
+        AgentsTree::project(
+            "demo",
+            [AgentsTree::Rules(vec![RuleNode {
+                name: "shared.md".into(),
+                body: RuleBody::Inline("same\n".into()),
+            }])],
+        ),
+    ]);
+    let ctx = CompileContext::new(project(), "demo");
+    let plan = compile(&tree, &ctx).unwrap();
+
+    let cursor_mkdirs = plan
+        .ops
+        .iter()
+        .filter(
+            |op| matches!(op, FsOp::MkdirP { path } if path == &project().join(".cursor/rules")),
+        )
+        .count();
+    assert_eq!(cursor_mkdirs, 1, "duplicate MkdirP collapses");
+    assert!(plan.warnings.is_empty());
+}
+
+#[test]
+fn conflicting_writes_emit_a_warning_and_keep_first() {
+    let tree = AgentsTree::global([
+        AgentsTree::Rules(vec![RuleNode {
+            name: "clash.md".into(),
+            body: RuleBody::Inline("first\n".into()),
+        }]),
+        AgentsTree::project(
+            "demo",
+            [AgentsTree::TextFile {
+                name: ".cursor/rules/global--clash.mdc".into(),
+                body: "second\n".into(),
+            }],
+        ),
+    ]);
+    let ctx = CompileContext::new(project(), "demo");
+    let plan = compile(&tree, &ctx).unwrap();
+
+    let kept = plan.ops.iter().find_map(|op| match op {
+        FsOp::WriteFile { path, content, .. }
+            if path == &project().join(".cursor/rules/global--clash.mdc") =>
+        {
+            Some(content.as_str())
+        }
+        _ => None,
+    });
+    assert_eq!(kept, Some("first\n"));
+    assert!(plan
+        .warnings
+        .iter()
+        .any(|w| w.contains("conflicting WriteFile")));
 }
 
 #[test]

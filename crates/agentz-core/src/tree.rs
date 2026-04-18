@@ -167,7 +167,10 @@ impl AgentsTree {
     }
 
     /// Build a [`ScopeKind::Project`] scope.
-    pub fn project(key: impl Into<ProjectKey>, children: impl IntoIterator<Item = AgentsTree>) -> Self {
+    pub fn project(
+        key: impl Into<ProjectKey>,
+        children: impl IntoIterator<Item = AgentsTree>,
+    ) -> Self {
         AgentsTree::Scope {
             kind: ScopeKind::Project { key: key.into() },
             children: children.into_iter().collect(),
@@ -193,7 +196,10 @@ impl AgentsTree {
 
     /// Build a [`ScopeKind::Profile`] scope. Merge `extends` and default content via
     /// [`AgentsTree::profile_def`] nodes registered in the same tree.
-    pub fn profile(id: impl Into<ProfileId>, children: impl IntoIterator<Item = AgentsTree>) -> Self {
+    pub fn profile(
+        id: impl Into<ProfileId>,
+        children: impl IntoIterator<Item = AgentsTree>,
+    ) -> Self {
         AgentsTree::Scope {
             kind: ScopeKind::Profile { id: id.into() },
             children: children.into_iter().collect(),

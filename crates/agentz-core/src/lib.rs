@@ -36,9 +36,7 @@ pub use id::{ProfileId, ProjectKey, StepId, WorkstreamId};
 pub use model::{cursor_display_name, AgentId, CursorRuleNaming, LinkKind, PlannedLink};
 pub use plan::{Dag, DagError, Objective, Plan, Step, StepKind, StepStatus};
 pub use plugins::{InstallContext, ProjectLinker};
-pub use schema::{
-    PluginSchemaEntry, PluginSchemaRegistry, PluginsSection, SchemaError,
-};
+pub use schema::{PluginSchemaEntry, PluginSchemaRegistry, PluginsSection, SchemaError};
 pub use tree::{AgentsTree, RuleNode, ScopeKind, SettingsNode, SkillNode};
 pub use vocabulary::{install_context, json_ld_install_report, SCHEMA_ORG};
 pub use workstream::{WorkstreamDescriptor, WorkstreamKind};

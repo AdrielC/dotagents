@@ -11,10 +11,7 @@ use super::duplex::ZenohDuplex;
 pub async fn open_local_peer() -> zenoh::Result<Session> {
     let mut config = zenoh::Config::default();
     config.set_mode(Some(zenoh::config::WhatAmI::Peer)).unwrap();
-    let _ = config
-        .scouting
-        .multicast
-        .set_enabled(Some(false));
+    let _ = config.scouting.multicast.set_enabled(Some(false));
     let _ = config.listen.endpoints.set(vec![]);
     let _ = config.connect.endpoints.set(vec![]);
     zenoh::open(config).await
@@ -33,7 +30,9 @@ pub struct ZenohBus {
 
 impl ZenohBus {
     pub fn new(session: Session) -> Self {
-        Self { session: Arc::new(session) }
+        Self {
+            session: Arc::new(session),
+        }
     }
 
     /// Build a duplex pair for a workstream — reads from `inbound_key`, writes to `outbound_key`.
@@ -42,6 +41,11 @@ impl ZenohBus {
         inbound_key: impl Into<String>,
         outbound_key: impl Into<String>,
     ) -> zenoh::Result<impl AsyncRead + AsyncWrite + Send + Unpin + 'static> {
-        ZenohDuplex::open(self.session.clone(), inbound_key.into(), outbound_key.into()).await
+        ZenohDuplex::open(
+            self.session.clone(),
+            inbound_key.into(),
+            outbound_key.into(),
+        )
+        .await
     }
 }
