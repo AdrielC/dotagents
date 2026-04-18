@@ -33,7 +33,10 @@ impl WorkstreamKind {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkstreamDescriptor {
+    /// Stable id (UUID; mint with [`WorkstreamId::new_v7`] or parse from storage).
     pub id: WorkstreamId,
+    /// Human path / short label for filenames and UI (e.g. `feat-auth`). Distinct from `id`.
+    pub slug: String,
     pub title: String,
     #[serde(default)]
     pub kind: WorkstreamKind,
@@ -47,14 +50,20 @@ pub struct WorkstreamDescriptor {
 }
 
 impl WorkstreamDescriptor {
-    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Self {
+    pub fn new(id: WorkstreamId, slug: impl Into<String>, title: impl Into<String>) -> Self {
         Self {
-            id: WorkstreamId::new(id),
+            id,
+            slug: slug.into(),
             title: title.into(),
             kind: WorkstreamKind::default(),
             objective: String::new(),
             root: None,
         }
+    }
+
+    /// Convenience: mint a new v7 id and fill slug/title.
+    pub fn new_v7(slug: impl Into<String>, title: impl Into<String>) -> Self {
+        Self::new(WorkstreamId::new_v7(), slug, title)
     }
 
     /// Zenoh-friendly key prefix: `cyberdyne/ws/{id}`.

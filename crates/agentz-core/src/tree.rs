@@ -94,8 +94,13 @@ pub enum ScopeKind {
     /// A single project/repo bucket (`{project_key}--*` rule prefixes).
     Project { key: ProjectKey },
     /// Per workstream overlay (`ws--{feature|spike|bug|tech-debt}--{slug}--*`).
+    ///
+    /// **`id`** is the stable UUID (v7 when minted); **`slug`** is the human path segment for
+    /// filenames and display (not required to be globally unique).
     Workstream {
-        slug: WorkstreamId,
+        id: WorkstreamId,
+        /// Short label for rule paths and UI (e.g. `feat-auth`); distinct from [`WorkstreamId`].
+        slug: String,
         /// Spike, Feature, Bug, or TechDebt — encoded in the rule filename prefix.
         #[serde(rename = "ws_kind")]
         ws_kind: WorkstreamKind,
@@ -111,8 +116,8 @@ impl ScopeKind {
         match self {
             ScopeKind::Global => "global".into(),
             ScopeKind::Project { key } => key.as_str().to_string(),
-            ScopeKind::Workstream { slug, ws_kind } => {
-                format!("ws--{}--{}", ws_kind.as_rule_segment(), slug.as_str())
+            ScopeKind::Workstream { slug, ws_kind, .. } => {
+                format!("ws--{}--{}", ws_kind.as_rule_segment(), slug)
             }
             ScopeKind::Profile { id, .. } => format!("profile--{}", id.as_str()),
         }
@@ -171,12 +176,14 @@ impl AgentsTree {
 
     /// Build a [`ScopeKind::Workstream`] scope (`ws--{kind}--{slug}` rule prefixes).
     pub fn workstream(
-        slug: impl Into<WorkstreamId>,
+        id: WorkstreamId,
+        slug: impl Into<String>,
         ws_kind: WorkstreamKind,
         children: impl IntoIterator<Item = AgentsTree>,
     ) -> Self {
         AgentsTree::Scope {
             kind: ScopeKind::Workstream {
+                id,
                 slug: slug.into(),
                 ws_kind,
             },

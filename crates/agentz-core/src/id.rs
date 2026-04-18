@@ -1,7 +1,8 @@
-//! Stable, string-backed newtypes used as routing and graph keys.
+//! Stable identifiers: mostly string-backed newtypes; [`WorkstreamId`] wraps a UUID (v7 at creation time).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 macro_rules! id_newtype {
     ($(#[$m:meta])* $name:ident) => {
@@ -26,8 +27,44 @@ macro_rules! id_newtype {
     };
 }
 
-id_newtype!(/// Stable identifier for a workstream.
-WorkstreamId);
+/// Stable **machine id** for a workstream (UUID; use [`uuid::Uuid::now_v7`] when minting).
+///
+/// Separate from the human **slug** on [`crate::tree::ScopeKind::Workstream`] used in rule
+/// filename prefixes and display — the slug is not guaranteed unique.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+#[schemars(transparent)]
+pub struct WorkstreamId(pub Uuid);
+
+impl WorkstreamId {
+    #[must_use]
+    pub fn new(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    /// Mint a new time-ordered id (UUID v7).
+    #[must_use]
+    pub fn new_v7() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    #[must_use]
+    pub fn as_uuid(&self) -> Uuid {
+        self.0
+    }
+}
+
+impl std::fmt::Display for WorkstreamId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0.as_hyphenated(), f)
+    }
+}
+
+impl From<Uuid> for WorkstreamId {
+    fn from(value: Uuid) -> Self {
+        Self(value)
+    }
+}
 
 id_newtype!(/// Stable identifier for a [`crate::plan::Step`] in a [`crate::plan::Plan`].
 StepId);

@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use agentz_core::compile::{compile, CompileContext, FsOp};
 use agentz_core::model::{AgentId, LinkKind};
 use agentz_core::ProfileId;
+use agentz_core::WorkstreamId;
 use agentz_core::WorkstreamKind;
+use uuid::Uuid;
 use agentz_core::tree::{AgentsTree, RuleBody, RuleNode, SettingsBody, SettingsNode, SkillBody, SkillNode};
 
 fn project() -> PathBuf {
@@ -202,6 +204,7 @@ fn nested_workstream_scope_uses_ws_prefix() {
     let tree = AgentsTree::global([AgentsTree::project(
         "demo",
         [AgentsTree::workstream(
+            WorkstreamId::new(Uuid::nil()),
             "feat-auth",
             WorkstreamKind::Feature,
             [AgentsTree::Rules(vec![RuleNode {
@@ -219,6 +222,7 @@ fn nested_workstream_scope_uses_ws_prefix() {
     let bug_tree = AgentsTree::global([AgentsTree::project(
         "demo",
         [AgentsTree::workstream(
+            WorkstreamId::new(Uuid::from_u128(1)),
             "crash-1",
             WorkstreamKind::Bug,
             [AgentsTree::Rules(vec![RuleNode {

@@ -8,7 +8,7 @@
 //!
 //! | Module | What |
 //! |--------|------|
-//! | [`id`] | Stable identifiers ([`WorkstreamId`](id::WorkstreamId), [`StepId`](id::StepId), etc.). |
+//! | [`id`] | Stable identifiers ([`WorkstreamId`](id::WorkstreamId) = UUID v7-capable, [`StepId`](id::StepId), etc.). |
 //! | [`model`] | Per-agent types: [`AgentId`](model::AgentId), [`LinkKind`](model::LinkKind), [`PlannedLink`](model::PlannedLink), [`CursorRuleNaming`](model::CursorRuleNaming). |
 //! | [`workstream`] | [`WorkstreamDescriptor`](workstream::WorkstreamDescriptor) + kind taxonomy. |
 //! | [`tree`] | Recursive **AgentsTree** AST + [`ScopeKind`](tree::ScopeKind) (global, project, workstream, profile). |
