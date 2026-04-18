@@ -1,0 +1,3 @@
+[submodule "dot-agents"]
+	path = dot-agents
+	url = https://github.com/dot-agents/dot-agents.git
