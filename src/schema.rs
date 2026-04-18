@@ -19,6 +19,14 @@ use crate::config::AgentsConfig;
 pub struct PluginSchemaEntry {
     /// Stable id (matches `plugins.config` key and [`crate::plugins::ProjectLinker::id`] when applicable).
     pub id: String,
+    /// Optional schema.org `@type` IRI for this plugin’s role (e.g. `https://schema.org/SoftwareSourceCode`).
+    /// Omitted in JSON when absent; defaults to `None`.
+    #[serde(
+        default,
+        rename = "schemaOrgType",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub schema_org_type: Option<String>,
     /// Logical kind: `linker`, `transform`, `validator`, or a custom string for your registry.
     #[serde(default)]
     pub kind: String,

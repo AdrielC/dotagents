@@ -31,6 +31,7 @@ fn registry_validates_config_against_inline_schema() {
     let mut reg = PluginSchemaRegistry::new();
     reg.register(PluginSchemaEntry {
         id: "echo".into(),
+        schema_org_type: None,
         kind: "linker".into(),
         description: String::new(),
         schema_uri: None,

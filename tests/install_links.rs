@@ -62,7 +62,7 @@ fn install_creates_cursor_hardlinks_and_symlinks() {
     let mut reg = PluginRegistry::new();
     reg.register(Box::new(DummyPlugin));
 
-    install_project(
+    let report = install_project(
         &agents,
         "p1",
         &repo,
@@ -97,4 +97,12 @@ fn install_creates_cursor_hardlinks_and_symlinks() {
     let cfg = agents.join("config.json");
     let raw = fs::read_to_string(&cfg).unwrap();
     assert!(raw.contains("\"p1\""));
+
+    let graph = report.schema_org_json_ld.expect("schema.org JSON-LD");
+    assert_eq!(graph["@context"]["@vocab"], "https://schema.org");
+    assert!(graph["@graph"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|n| n["@type"] == "InstallAction"));
 }
