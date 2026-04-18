@@ -99,6 +99,10 @@ pub fn default_config_json() -> serde_json::Value {
         "notifications": {
             "on_migration": true,
             "on_conflict": true
+        },
+        "plugins": {
+            "schemas": [],
+            "config": {}
         }
     })
 }

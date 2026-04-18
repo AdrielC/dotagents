@@ -14,6 +14,7 @@ use thiserror::Error;
 use crate::config::{read_config, write_config, AgentsConfig, ProjectEntry};
 use crate::model::{cursor_display_name, AgentId, LinkKind, PlannedLink};
 use crate::plugins::{InstallContext, PluginRegistry};
+use crate::schema::plugins_section_from_config;
 
 const SKILL_FILE: &str = "SKILL.md";
 
@@ -23,6 +24,8 @@ pub enum InstallError {
     Io(#[from] io::Error),
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("plugin schema: {0}")]
+    PluginSchema(#[from] crate::schema::SchemaError),
     #[error("symlinks are only supported on unix targets in this build")]
     SymlinkNotSupported,
     #[error("refusing to replace existing path without force: {0}")]
@@ -138,7 +141,7 @@ pub fn install_project(
     project_key: &str,
     project_path: &Path,
     opts: &InstallOptions,
-    plugins: Option<&PluginRegistry>,
+    plugins: Option<&mut PluginRegistry>,
 ) -> Result<InstallReport, InstallError> {
     let mut report = InstallReport::default();
     let cfg_path = agents_home.join("config.json");
@@ -173,6 +176,10 @@ pub fn install_project(
     plan_skills_codex(&ctx, &mut report)?;
 
     if let Some(reg) = plugins {
+        let plugins_section = plugins_section_from_config(&cfg);
+        if let Err(e) = reg.sync_from_agents_config(&plugins_section) {
+            return Err(InstallError::PluginSchema(e));
+        }
         let pctx = InstallContext {
             agents_home,
             project_key,

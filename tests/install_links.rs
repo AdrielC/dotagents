@@ -72,7 +72,7 @@ fn install_creates_cursor_hardlinks_and_symlinks() {
             register_project: true,
             agents: None,
         },
-        Some(&reg),
+        Some(&mut reg),
     )
     .unwrap();
 
