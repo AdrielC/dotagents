@@ -8,13 +8,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::WorkstreamId;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// Category of a workstream (used in scope rule prefixes and routing metadata).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WorkstreamKind {
     #[default]
     Feature,
-    Incident,
     Spike,
+    Bug,
+    TechDebt,
+}
+
+impl WorkstreamKind {
+    /// Short segment in compiled rule filenames: `ws--{segment}--{slug}--*`.
+    pub fn as_rule_segment(self) -> &'static str {
+        match self {
+            WorkstreamKind::Feature => "feature",
+            WorkstreamKind::Spike => "spike",
+            WorkstreamKind::Bug => "bug",
+            WorkstreamKind::TechDebt => "tech-debt",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]

@@ -19,8 +19,9 @@
 //!
 //! ## Scopes and composition
 //!
-//! [`ScopeKind`] classifies each branch: **global** (user-wide), **project**, **workstream** (slug),
-//! or **profile** (slug + optional `extends` chain). You **nest** scopes by placing
+//! [`ScopeKind`] classifies each branch: **global** (user-wide), **project**, **workstream** (slug +
+//! [`WorkstreamKind`](crate::workstream::WorkstreamKind)), or **profile** (id + optional `extends`
+//! via [`AgentsTree::ProfileDef`]). You **nest** scopes by placing
 //! [`AgentsTree::Scope`] nodes inside `children` — e.g. global → project → workstream. **Profiles**
 //! merge inherited profile definitions (see [`ScopeKind::Profile`]) then apply their own leaves on
 //! top (rules/skills/settings/MCP override by key).
@@ -32,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::{ProfileId, ProjectKey, WorkstreamId};
 use crate::model::AgentId;
+use crate::workstream::WorkstreamKind;
 
 /// A rule file. `body` is either inline content or an on-disk source the IO layer will hard-link
 /// or symlink when it materializes the plan.
@@ -91,8 +93,13 @@ pub enum ScopeKind {
     Global,
     /// A single project/repo bucket (`{project_key}--*` rule prefixes).
     Project { key: ProjectKey },
-    /// Per workstream overlay (`ws--{slug}--*`).
-    Workstream { slug: WorkstreamId },
+    /// Per workstream overlay (`ws--{feature|spike|bug|tech-debt}--{slug}--*`).
+    Workstream {
+        slug: WorkstreamId,
+        /// Spike, Feature, Bug, or TechDebt — encoded in the rule filename prefix.
+        #[serde(rename = "ws_kind")]
+        ws_kind: WorkstreamKind,
+    },
     /// Named profile (`profile--{id}--*`). Inheritance is defined on [`AgentsTree::ProfileDef`]
     /// entries in the tree (see registry + [`ProfileRegistry`](crate::compile::ProfileRegistry) in `compile`).
     Profile { id: ProfileId },
@@ -104,7 +111,9 @@ impl ScopeKind {
         match self {
             ScopeKind::Global => "global".into(),
             ScopeKind::Project { key } => key.as_str().to_string(),
-            ScopeKind::Workstream { slug } => format!("ws--{}", slug.as_str()),
+            ScopeKind::Workstream { slug, ws_kind } => {
+                format!("ws--{}--{}", ws_kind.as_rule_segment(), slug.as_str())
+            }
             ScopeKind::Profile { id, .. } => format!("profile--{}", id.as_str()),
         }
     }
@@ -160,11 +169,16 @@ impl AgentsTree {
         }
     }
 
-    /// Build a [`ScopeKind::Workstream`] scope (`ws--{slug}` prefixes).
-    pub fn workstream(slug: impl Into<WorkstreamId>, children: impl IntoIterator<Item = AgentsTree>) -> Self {
+    /// Build a [`ScopeKind::Workstream`] scope (`ws--{kind}--{slug}` rule prefixes).
+    pub fn workstream(
+        slug: impl Into<WorkstreamId>,
+        ws_kind: WorkstreamKind,
+        children: impl IntoIterator<Item = AgentsTree>,
+    ) -> Self {
         AgentsTree::Scope {
             kind: ScopeKind::Workstream {
                 slug: slug.into(),
+                ws_kind,
             },
             children: children.into_iter().collect(),
         }

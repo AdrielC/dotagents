@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use agentz_core::compile::{compile, CompileContext, FsOp};
 use agentz_core::model::{AgentId, LinkKind};
 use agentz_core::ProfileId;
+use agentz_core::WorkstreamKind;
 use agentz_core::tree::{AgentsTree, RuleBody, RuleNode, SettingsBody, SettingsNode, SkillBody, SkillNode};
 
 fn project() -> PathBuf {
@@ -202,6 +203,7 @@ fn nested_workstream_scope_uses_ws_prefix() {
         "demo",
         [AgentsTree::workstream(
             "feat-auth",
+            WorkstreamKind::Feature,
             [AgentsTree::Rules(vec![RuleNode {
                 name: "ws-rule.md".into(),
                 body: RuleBody::Inline("ws\n".into()),
@@ -212,5 +214,21 @@ fn nested_workstream_scope_uses_ws_prefix() {
     let plan = compile(&tree, &ctx).unwrap();
     assert!(plan.ops.iter().any(|op| matches!(op,
         FsOp::WriteFile { path, .. }
-            if path == &project().join(".cursor/rules/ws--feat-auth--ws-rule.mdc"))));
+            if path == &project().join(".cursor/rules/ws--feature--feat-auth--ws-rule.mdc"))));
+
+    let bug_tree = AgentsTree::global([AgentsTree::project(
+        "demo",
+        [AgentsTree::workstream(
+            "crash-1",
+            WorkstreamKind::Bug,
+            [AgentsTree::Rules(vec![RuleNode {
+                name: "fix.md".into(),
+                body: RuleBody::Inline("fix\n".into()),
+            }])],
+        )],
+    )]);
+    let bug_plan = compile(&bug_tree, &ctx).unwrap();
+    assert!(bug_plan.ops.iter().any(|op| matches!(op,
+        FsOp::WriteFile { path, .. }
+            if path == &project().join(".cursor/rules/ws--bug--crash-1--fix.mdc"))));
 }
