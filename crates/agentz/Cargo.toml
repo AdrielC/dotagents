@@ -1,0 +1,63 @@
+[package]
+name = "agentz"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "agentz: unified AI-agent workstream runtime. Wires IO, MCP (stdio), Zenoh bus, and ACP on top of agentz-core."
+
+[dependencies]
+agentz-core = { path = "../agentz-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+schemars = { workspace = true }
+jsonschema = { workspace = true }
+pathdiff = { workspace = true }
+
+tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+rmcp = { workspace = true, optional = true }
+zenoh = { workspace = true, optional = true }
+agent-client-protocol = { workspace = true, optional = true }
+
+[features]
+default = []
+mcp = [
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:futures",
+    "dep:async-trait",
+    "dep:tracing",
+    "dep:rmcp",
+    "rmcp/server",
+    "rmcp/transport-io",
+    "rmcp/macros",
+    "rmcp/schemars",
+    "rmcp/base64",
+]
+zenoh-bus = [
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:futures",
+    "dep:tracing",
+    "dep:zenoh",
+]
+acp = [
+    "dep:tokio",
+    "dep:tokio-util",
+    "dep:futures",
+    "dep:async-trait",
+    "dep:tracing",
+    "dep:agent-client-protocol",
+]
+full = ["mcp", "zenoh-bus", "acp"]
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "io-util", "sync", "time"] }
+rmcp = { workspace = true, features = ["client", "server", "transport-io", "macros", "schemars", "base64"] }

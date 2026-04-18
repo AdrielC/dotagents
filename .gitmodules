@@ -1,0 +1,9 @@
+[submodule "dot-agents"]
+	path = dot-agents
+	url = https://github.com/dot-agents/dot-agents.git
+[submodule "dotagents-iannuttall"]
+	path = dotagents-iannuttall
+	url = https://github.com/iannuttall/dotagents.git
+[submodule "crmux"]
+	path = crmux
+	url = https://github.com/maedana/crmux.git
