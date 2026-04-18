@@ -4,3 +4,6 @@
 [submodule "dotagents-iannuttall"]
 	path = dotagents-iannuttall
 	url = https://github.com/iannuttall/dotagents.git
+[submodule "crmux"]
+	path = crmux
+	url = https://github.com/maedana/crmux.git
