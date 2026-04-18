@@ -1,4 +1,9 @@
 //! Pure compilation tests. Walks an `AgentsTree` AST and asserts the produced `FsOp` list.
+//!
+//! **Cursor ↔ Claude:** One [`AgentsTree::Rules`] node is the unified bundle; [`compile`]
+//! emits **both** `.cursor/rules/…` (Cursor: `.md`→`.mdc`, hard link or copy) and
+//! `.claude/rules/…` (Claude: `…--{base}.md`, symlink) so a single tree is the
+//! cross-agent “conversion” without a separate IO step in `agentz-core`.
 
 use std::path::PathBuf;
 
@@ -52,6 +57,55 @@ fn tree_compiles_rules_into_cursor_and_claude() {
         FsOp::WriteFile { path, .. } if path == &project().join(".mcp.json"))));
     assert!(plan.ops.iter().any(|op| matches!(op,
         FsOp::WriteFile { path, .. } if path == &project().join(".cursor/mcp.json"))));
+}
+
+/// One rules bundle → Cursor file + Claude file with the **same** scope prefix and body.
+#[test]
+fn unified_inline_rule_maps_to_cursor_mdc_and_claude_md() {
+    let body = "# One source of truth\n";
+    let tree = AgentsTree::global([AgentsTree::Rules(vec![RuleNode {
+        name: "010-style.md".into(),
+        body: RuleBody::Inline(body.into()),
+    }])]);
+    let ctx = CompileContext::new(project(), "demo");
+    let plan = compile(&tree, &ctx).unwrap();
+
+    let cursor_write = plan.ops.iter().find_map(|op| match op {
+        FsOp::WriteFile { path, content, .. }
+            if path == &project().join(".cursor/rules/global--010-style.mdc") =>
+        {
+            Some(content.as_str())
+        }
+        _ => None,
+    });
+    let claude_write = plan.ops.iter().find_map(|op| match op {
+        FsOp::WriteFile { path, content, .. }
+            if path == &project().join(".claude/rules/global--010-style.md") =>
+        {
+            Some(content.as_str())
+        }
+        _ => None,
+    });
+    assert_eq!(cursor_write, Some(body));
+    assert_eq!(claude_write, Some(body));
+}
+
+/// `.mdc` in the unified tree keeps Cursor’s `.mdc` dest; Claude normalizes to `{base}.md`.
+#[test]
+fn mdc_rule_name_compiles_to_claude_md_and_cursor_mdc() {
+    let tree = AgentsTree::global([AgentsTree::Rules(vec![RuleNode {
+        name: "020-strict.mdc".into(),
+        body: RuleBody::Inline("strict\n".into()),
+    }])]);
+    let ctx = CompileContext::new(project(), "demo");
+    let plan = compile(&tree, &ctx).unwrap();
+
+    assert!(plan.ops.iter().any(|op| matches!(op,
+        FsOp::WriteFile { path, .. }
+            if path == &project().join(".cursor/rules/global--020-strict.mdc"))));
+    assert!(plan.ops.iter().any(|op| matches!(op,
+        FsOp::WriteFile { path, .. }
+            if path == &project().join(".claude/rules/global--020-strict.md"))));
 }
 
 #[test]
