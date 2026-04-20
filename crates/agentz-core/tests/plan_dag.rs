@@ -6,12 +6,16 @@ fn topological_order_is_deterministic() {
     let install = Step::new(
         "install",
         "install links",
-        StepKind::Install { project_key: "demo".into() },
+        StepKind::Install {
+            project_key: "demo".into(),
+        },
     );
     let commit = Step::new(
         "commit",
         "commit changes",
-        StepKind::Shell { command: "git commit".into() },
+        StepKind::Shell {
+            command: "git commit".into(),
+        },
     );
 
     let mut plan = Plan::new(Objective::new("ship"));
@@ -42,6 +46,8 @@ fn cycle_is_rejected() {
 fn duplicate_step_id_is_rejected() {
     let mut dag = Dag::new();
     dag.add(Step::new("a", "a", StepKind::Noop)).unwrap();
-    let err = dag.add(Step::new("a", "again", StepKind::Noop)).unwrap_err();
+    let err = dag
+        .add(Step::new("a", "again", StepKind::Noop))
+        .unwrap_err();
     assert!(matches!(err, DagError::Duplicate(_)));
 }

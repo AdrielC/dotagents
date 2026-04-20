@@ -1,0 +1,9 @@
+---
+alwaysApply: false
+description: Rust-only conventions attached when Rust files are in context
+globs: ["**/*.rs", "Cargo.toml"]
+---
+# Rust conventions
+
+- Use `thiserror` for library errors.
+- Return `Result<T, E>` from fallible APIs.

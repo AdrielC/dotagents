@@ -17,7 +17,11 @@ pub struct PluginSchemaEntry {
     pub id: String,
 
     /// Optional [schema.org](https://schema.org) `@type` IRI for this plugin's domain role.
-    #[serde(default, rename = "schemaOrgType", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "schemaOrgType",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub schema_org_type: Option<String>,
 
     /// Logical kind: `linker`, `transform`, `validator`, or a custom string.
@@ -69,7 +73,11 @@ pub enum SchemaError {
     #[error("unknown plugin id for validation: {0}")]
     UnknownPlugin(String),
     #[error("plugin {id}: config kind mismatch (expected {expected}, got {got})")]
-    KindMismatch { id: String, expected: String, got: String },
+    KindMismatch {
+        id: String,
+        expected: String,
+        got: String,
+    },
     #[error("plugin {id}: {errors:?}")]
     Validation { id: String, errors: Vec<String> },
     #[error("invalid plugin schema for `{id}`: {message}")]
@@ -165,10 +173,16 @@ fn validate_against_json_schema(
         id: id.to_string(),
         message: e.to_string(),
     })?;
-    let errors: Vec<String> = validator.iter_errors(value).map(|e| e.to_string()).collect();
+    let errors: Vec<String> = validator
+        .iter_errors(value)
+        .map(|e| e.to_string())
+        .collect();
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(SchemaError::Validation { id: id.to_string(), errors })
+        Err(SchemaError::Validation {
+            id: id.to_string(),
+            errors,
+        })
     }
 }

@@ -87,10 +87,7 @@ async fn mcp_server_registers_and_validates_plugin_schemas() {
         })
         .await
         .unwrap();
-    assert_eq!(
-        ok.structured_content.as_ref().unwrap()["ok"],
-        json!(true)
-    );
+    assert_eq!(ok.structured_content.as_ref().unwrap()["ok"], json!(true));
 
     let bad = client
         .call_tool(CallToolRequestParam {
@@ -99,10 +96,7 @@ async fn mcp_server_registers_and_validates_plugin_schemas() {
         })
         .await
         .unwrap();
-    assert_eq!(
-        bad.structured_content.as_ref().unwrap()["ok"],
-        json!(false)
-    );
+    assert_eq!(bad.structured_content.as_ref().unwrap()["ok"], json!(false));
 
     let audit = client
         .call_tool(CallToolRequestParam {

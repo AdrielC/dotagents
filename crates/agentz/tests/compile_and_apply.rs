@@ -9,7 +9,6 @@ use std::fs;
 use agentz::apply::{apply_plan, ApplyOptions};
 use agentz_core::compile::{compile, CompileContext};
 use agentz_core::tree::{AgentsTree, RuleBody, RuleNode, SettingsBody, SettingsNode};
-use agentz_core::AgentId;
 
 #[test]
 fn compile_then_apply_produces_real_files() {
@@ -22,18 +21,19 @@ fn compile_then_apply_produces_real_files() {
             name: "010-style.md".into(),
             body: RuleBody::Inline("# style\n".into()),
         }]),
-        AgentsTree::Settings(vec![SettingsNode {
-            agent: AgentId::ClaudeCode,
-            file_name: "settings.local.json".into(),
-            body: SettingsBody::Inline("{\"ok\":true}\n".into()),
-        }]),
+        AgentsTree::Settings(vec![SettingsNode::claude_local(SettingsBody::Inline(
+            "{\"ok\":true}\n".into(),
+        ))]),
     ]);
     let ctx = CompileContext::new(&project, "demo");
     let plan = compile(&tree, &ctx).unwrap();
 
     let report = apply_plan(
         &plan,
-        &ApplyOptions { force: true, dry_run: false },
+        &ApplyOptions {
+            force: true,
+            dry_run: false,
+        },
     )
     .unwrap();
 

@@ -42,7 +42,10 @@ async fn mcp_tools_roundtrip_over_zenoh_duplex() {
     let (client_read, client_write) = tokio::io::split(client_duplex);
 
     let server_task = tokio::spawn(async move {
-        server.serve_transport(server_read, server_write).await.unwrap();
+        server
+            .serve_transport(server_read, server_write)
+            .await
+            .unwrap();
     });
 
     // Give zenoh a tick to propagate subscriptions so the client's initialize lands.
@@ -87,10 +90,7 @@ async fn mcp_tools_roundtrip_over_zenoh_duplex() {
         })
         .await
         .unwrap();
-    assert_eq!(
-        ok.structured_content.as_ref().unwrap()["ok"],
-        json!(true)
-    );
+    assert_eq!(ok.structured_content.as_ref().unwrap()["ok"], json!(true));
 
     drop(client);
     let _ = tokio::time::timeout(Duration::from_secs(2), server_task).await;

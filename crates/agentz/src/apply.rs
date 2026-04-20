@@ -51,11 +51,17 @@ pub fn apply_plan(plan: &CompiledPlan, opts: &ApplyOptions) -> Result<ApplyRepor
         }
         match op {
             FsOp::MkdirP { path } => fs::create_dir_all(path)?,
-            FsOp::WriteFile { path, overwrite, content } => {
+            FsOp::WriteFile {
+                path,
+                overwrite,
+                content,
+            } => {
                 if let Some(parent) = path.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                if path.exists() && !overwrite && !opts.force {
+                // `symlink_metadata` so a previous symlink at `path` (even a broken one) counts as
+                // "exists" and isn't silently clobbered without `overwrite` or `force`.
+                if fs::symlink_metadata(path).is_ok() && !overwrite && !opts.force {
                     report.skipped.push(format!("exists: {}", path.display()));
                     continue;
                 }
@@ -87,7 +93,11 @@ fn apply_copy(link: &PlannedLink, force: bool, report: &mut ApplyReport) -> Resu
     Ok(())
 }
 
-fn apply_hardlink(link: &PlannedLink, force: bool, report: &mut ApplyReport) -> Result<(), ApplyError> {
+fn apply_hardlink(
+    link: &PlannedLink,
+    force: bool,
+    report: &mut ApplyReport,
+) -> Result<(), ApplyError> {
     if !link.source.is_file() {
         return Err(ApplyError::MissingSource(link.source.clone()));
     }
@@ -135,7 +145,11 @@ fn same_file(a: &Path, b: &Path) -> io::Result<bool> {
     }
 }
 
-fn apply_symlink(link: &PlannedLink, force: bool, report: &mut ApplyReport) -> Result<(), ApplyError> {
+fn apply_symlink(
+    link: &PlannedLink,
+    force: bool,
+    report: &mut ApplyReport,
+) -> Result<(), ApplyError> {
     #[cfg(not(unix))]
     {
         let _ = (link, force, report);
@@ -175,10 +189,13 @@ fn apply_symlink(link: &PlannedLink, force: bool, report: &mut ApplyReport) -> R
 }
 
 fn compute_symlink_target(source: &Path, dest: &Path) -> io::Result<PathBuf> {
-    let dest_dir = dest.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "symlink dest has no parent")
-    })?;
+    let dest_dir = dest
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "symlink dest has no parent"))?;
     pathdiff::diff_paths(source, dest_dir).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "could not compute relative symlink target")
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "could not compute relative symlink target",
+        )
     })
 }

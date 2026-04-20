@@ -31,7 +31,9 @@ macro_rules! id_newtype {
 ///
 /// Separate from the human **slug** on [`crate::tree::ScopeKind::Workstream`] used in rule
 /// filename prefixes and display — the slug is not guaranteed unique.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(transparent)]
 #[schemars(transparent)]
 pub struct WorkstreamId(pub Uuid);

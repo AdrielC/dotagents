@@ -1,0 +1,8 @@
+---
+alwaysApply: true
+description: Always-on coding style rules for this repo
+---
+# Coding style
+
+- Prefer small, composable functions.
+- Every public item has a doc comment.

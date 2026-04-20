@@ -6,11 +6,12 @@
 //!
 //! # Flow control
 //!
-//! - **Writes** are non-blocking: bytes are published immediately on the outbound key.
-//! - **Reads** pull from a `mpsc::channel` fed by a background Tokio task attached to the
+//! - **Writes** are queued into a bounded channel drained by a single background task that awaits
+//!   `Session::put` in order. This preserves write ordering, which JSON-RPC framing requires — a
+//!   naive `tokio::spawn` per write can reorder samples on the wire.
+//! - **Reads** pull from an mpsc channel fed by a background Tokio task attached to the
 //!   subscriber. Each Zenoh `Sample` pushes its payload as one chunk.
 
-use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -24,7 +25,8 @@ use zenoh::Session;
 /// Read half of a Zenoh-backed duplex.
 pub struct ZenohDuplexReader {
     rx: mpsc::Receiver<Vec<u8>>,
-    buf: VecDeque<u8>,
+    pending: Vec<u8>,
+    pos: usize,
 }
 
 impl AsyncRead for ZenohDuplexReader {
@@ -34,18 +36,21 @@ impl AsyncRead for ZenohDuplexReader {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         loop {
-            if !self.buf.is_empty() {
-                let to_copy = std::cmp::min(buf.remaining(), self.buf.len());
-                for _ in 0..to_copy {
-                    if let Some(b) = self.buf.pop_front() {
-                        buf.put_slice(&[b]);
-                    }
+            if self.pos < self.pending.len() {
+                let remaining = &self.pending[self.pos..];
+                let n = remaining.len().min(buf.remaining());
+                buf.put_slice(&remaining[..n]);
+                self.pos += n;
+                if self.pos == self.pending.len() {
+                    self.pending.clear();
+                    self.pos = 0;
                 }
                 return Poll::Ready(Ok(()));
             }
             match self.rx.poll_recv(cx) {
                 Poll::Ready(Some(chunk)) => {
-                    self.buf.extend(chunk);
+                    self.pending = chunk;
+                    self.pos = 0;
                 }
                 Poll::Ready(None) => return Poll::Ready(Ok(())),
                 Poll::Pending => return Poll::Pending,
@@ -54,10 +59,10 @@ impl AsyncRead for ZenohDuplexReader {
     }
 }
 
-/// Write half of a Zenoh-backed duplex. Each `poll_write` is a Zenoh `put` on the outbound key.
+/// Write half of a Zenoh-backed duplex. Writes are pushed into a serialized background publisher
+/// so samples reach the outbound key in the order `poll_write` accepted them.
 pub struct ZenohDuplexWriter {
-    session: Arc<Session>,
-    key: Arc<str>,
+    tx: mpsc::UnboundedSender<Vec<u8>>,
 }
 
 impl AsyncWrite for ZenohDuplexWriter {
@@ -66,15 +71,13 @@ impl AsyncWrite for ZenohDuplexWriter {
         _cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let session = self.session.clone();
-        let key = self.key.clone();
-        let payload = buf.to_vec();
-        let len = payload.len();
-        // zenoh `put().await` can be backgrounded; we don't need the handle.
-        tokio::spawn(async move {
-            let _ = session.put(key.as_ref(), payload).await;
-        });
-        Poll::Ready(Ok(len))
+        if self.tx.send(buf.to_vec()).is_err() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "zenoh duplex writer task has exited",
+            )));
+        }
+        Poll::Ready(Ok(buf.len()))
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -98,25 +101,40 @@ impl ZenohDuplex {
         inbound_key: String,
         outbound_key: String,
     ) -> zenoh::Result<Self> {
-        let subscriber = session
-            .declare_subscriber(inbound_key.as_str())
-            .await?;
-        let (tx, rx) = mpsc::channel::<Vec<u8>>(256);
+        let subscriber = session.declare_subscriber(inbound_key.as_str()).await?;
+        let (rx_tx, rx) = mpsc::channel::<Vec<u8>>(256);
         tokio::spawn(async move {
             let mut stream = subscriber.stream();
             while let Some(sample) = stream.next().await {
                 let bytes: Vec<u8> = sample.payload().to_bytes().into_owned();
-                if tx.send(bytes).await.is_err() {
+                if rx_tx.send(bytes).await.is_err() {
                     break;
                 }
             }
         });
+
+        let (tx, mut tx_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let writer_session = session.clone();
+        let writer_key: Arc<str> = Arc::from(outbound_key);
+        tokio::spawn(async move {
+            while let Some(bytes) = tx_rx.recv().await {
+                if writer_session
+                    .put(writer_key.as_ref(), bytes)
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+
         Ok(ZenohDuplex {
-            reader: ZenohDuplexReader { rx, buf: VecDeque::new() },
-            writer: ZenohDuplexWriter {
-                session,
-                key: Arc::<str>::from(outbound_key),
+            reader: ZenohDuplexReader {
+                rx,
+                pending: Vec::new(),
+                pos: 0,
             },
+            writer: ZenohDuplexWriter { tx },
         })
     }
 

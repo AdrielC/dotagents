@@ -61,3 +61,6 @@ full = ["mcp", "zenoh-bus", "acp"]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "io-util", "sync", "time"] }
 rmcp = { workspace = true, features = ["client", "server", "transport-io", "macros", "schemars", "base64"] }
+
+[lints]
+workspace = true
