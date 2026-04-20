@@ -24,11 +24,16 @@
 //! actually run installs, talk MCP, or route Zenoh traffic.
 
 pub mod compile;
+pub mod config;
+pub mod dialect;
+pub mod dialects;
+pub mod diff;
 pub mod id;
 pub mod model;
 pub mod parser;
 pub mod plan;
 pub mod plugins;
+pub mod render;
 pub mod repo;
 pub mod schema;
 pub mod tree;
@@ -36,20 +41,25 @@ pub mod vocabulary;
 pub mod workstream;
 
 pub use compile::{CompileContext, CompileError, CompiledPlan, FsOp, ProfileRegistry};
+pub use dialect::{Dialect, FileSource, MemFileSource, RealFileSource};
+pub use diff::{Diff, DiffEntry, EntryKind};
 pub use id::{ProfileId, ProjectKey, StepId, WorkstreamId};
 pub use model::{
-    cursor_display_name, AgentId, AgentSpec, CursorRuleNaming, HooksLayout, IgnoreKind,
-    IgnoreLayout, LinkKind, McpLayout, PlannedLink, RuleNameRewrite, RulesLayout, SettingsLayout,
-    SettingsScope, SkillsLayout, SPECS,
+    cursor_display_name, AgentId, AgentSpec, AgentsLayout, CursorRuleNaming, HooksLayout,
+    IgnoreKind, IgnoreLayout, LinkKind, McpLayout, PlannedLink, RuleNameRewrite, RulesLayout,
+    SettingsLayout, SettingsScope, SkillsLayout, SPECS,
 };
 pub use plan::{Dag, DagError, Objective, Plan, Step, StepKind, StepStatus};
 pub use plugins::{InstallContext, ProjectLinker};
+pub use render::{
+    render_tree, ProjectVars, RenderContext, RenderError, RenderOptions, WorkstreamVars,
+};
 pub use repo::{Repo, RepoId, RepoSource, Workspace};
 pub use schema::{PluginSchemaEntry, PluginSchemaRegistry, PluginsSection, SchemaError};
 pub use tree::{
-    AgentsTree, HookBinding, HookEvent, HookHandler, RuleBody, RuleNode, ScopeKind, SettingsBody,
-    SettingsNode, SkillBody, SkillNode, SCOPE_GLOBAL, SCOPE_PROFILE_PREFIX, SCOPE_SEP,
-    SCOPE_WORKSTREAM_PREFIX,
+    AgentBody, AgentNode, AgentsTree, HookBinding, HookEvent, HookHandler, RuleBody, RuleNode,
+    ScopeKind, SettingsBody, SettingsNode, SkillBody, SkillNode, SCOPE_GLOBAL,
+    SCOPE_PROFILE_PREFIX, SCOPE_SEP, SCOPE_WORKSTREAM_PREFIX,
 };
 pub use vocabulary::{
     install_context, json_ld_install_report, ActionStatus, SchemaType, AGENTZ_APP_ID,

@@ -213,6 +213,18 @@ pub struct IgnoreLayout {
     pub secondary: Option<&'static str>,
 }
 
+/// How an agent stores **subagents** — distinct from skills; Claude-specific today.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentsLayout {
+    /// Flat `<config_dir>/<dir>/<name>.<extension>` (Claude's `.claude/agents/<name>.md`).
+    FlatFile {
+        dir: &'static str,
+        extension: &'static str,
+    },
+    /// This agent has no subagent concept.
+    None,
+}
+
 /// Complete per-agent policy. One row per [`AgentId`] in [`SPECS`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AgentSpec {
@@ -227,6 +239,7 @@ pub struct AgentSpec {
     pub mcp: McpLayout,
     pub hooks: HooksLayout,
     pub ignore: IgnoreLayout,
+    pub agents: AgentsLayout,
 }
 
 /// Kinds of ignore file. Used both for serde on [`crate::tree::AgentsTree::Ignore`] and to pick
@@ -340,6 +353,7 @@ pub static SPECS: &[AgentSpec] = &[
             primary: Some(".cursorignore"),
             secondary: Some(".cursorindexignore"),
         },
+        agents: AgentsLayout::None,
     },
     AgentSpec {
         agent: AgentId::ClaudeCode,
@@ -371,6 +385,10 @@ pub static SPECS: &[AgentSpec] = &[
             primary: Some(".claudeignore"),
             secondary: None,
         },
+        agents: AgentsLayout::FlatFile {
+            dir: "agents",
+            extension: "md",
+        },
     },
     AgentSpec {
         agent: AgentId::Codex,
@@ -399,6 +417,7 @@ pub static SPECS: &[AgentSpec] = &[
             primary: None,
             secondary: None,
         },
+        agents: AgentsLayout::None,
     },
     AgentSpec {
         agent: AgentId::OpenCode,
@@ -417,6 +436,7 @@ pub static SPECS: &[AgentSpec] = &[
             primary: None,
             secondary: None,
         },
+        agents: AgentsLayout::None,
     },
     AgentSpec {
         agent: AgentId::Gemini,
@@ -435,6 +455,7 @@ pub static SPECS: &[AgentSpec] = &[
             primary: None,
             secondary: None,
         },
+        agents: AgentsLayout::None,
     },
     AgentSpec {
         agent: AgentId::Factory,
@@ -453,6 +474,7 @@ pub static SPECS: &[AgentSpec] = &[
             primary: None,
             secondary: None,
         },
+        agents: AgentsLayout::None,
     },
     AgentSpec {
         agent: AgentId::Github,
@@ -471,6 +493,7 @@ pub static SPECS: &[AgentSpec] = &[
             primary: None,
             secondary: None,
         },
+        agents: AgentsLayout::None,
     },
     AgentSpec {
         agent: AgentId::Ampcode,
@@ -489,6 +512,7 @@ pub static SPECS: &[AgentSpec] = &[
             primary: None,
             secondary: None,
         },
+        agents: AgentsLayout::None,
     },
 ];
 

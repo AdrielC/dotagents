@@ -1,0 +1,22 @@
+[package]
+name = "agentz-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Command-line driver for agentz: ingest, compile, apply, migrate, diff, validate."
+
+[[bin]]
+name = "agentz"
+path = "src/main.rs"
+
+[dependencies]
+agentz = { path = "../agentz" }
+agentz-core = { path = "../agentz-core" }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

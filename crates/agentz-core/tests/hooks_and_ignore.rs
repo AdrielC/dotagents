@@ -48,9 +48,33 @@ fn hooks_land_in_cursor_hooks_json_and_claude_companion() {
             _ => None,
         })
         .unwrap();
-    assert!(cursor_content.contains("PreToolUse"));
+    // Cursor's hooks.json uses camelCase event names and `version: 1` (integer), distinct from
+    // Claude's PascalCase + `"1.0"` string. Assert the real Cursor shape.
+    assert!(
+        cursor_content.contains("preToolUse"),
+        "cursor camelCase event: got {cursor_content}"
+    );
+    assert!(
+        cursor_content.contains("\"version\": 1"),
+        "cursor version must be integer 1"
+    );
     assert!(cursor_content.contains("Bash"));
     assert!(cursor_content.contains("scripts/validate.sh"));
+
+    let claude_content = plan
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            FsOp::WriteFile { path, content, .. } if path == &claude_companion => {
+                Some(content.as_str())
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        claude_content.contains("PreToolUse"),
+        "claude PascalCase event"
+    );
 }
 
 #[test]

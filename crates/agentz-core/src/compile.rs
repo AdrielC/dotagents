@@ -3,21 +3,13 @@
 //! `CompiledPlan` is a list of [`FsOp`] values describing the exact filesystem operations an IO
 //! layer should perform. This module itself never touches disk.
 //!
-//! ## Data-driven emission
+//! ## Data-driven + dialect-driven emission
 //!
-//! This module used to host three hand-rolled `RuleBackend` impls (one per agent) that each
-//! hardcoded its own directory and filename-rewrite rules. That's gone. Emission walks the single
-//! [`crate::model::SPECS`] table and asks each [`AgentSpec`](crate::model::AgentSpec) — via typed
-//! policies on [`RulesLayout`](crate::model::RulesLayout), [`SkillsLayout`](crate::model::SkillsLayout),
-//! [`SettingsLayout`](crate::model::SettingsLayout), [`McpLayout`](crate::model::McpLayout),
-//! [`HooksLayout`](crate::model::HooksLayout), [`IgnoreLayout`](crate::model::IgnoreLayout) — where
-//! and how its files land. Adding an agent is one row in `SPECS`; no match arms to edit here.
-//!
-//! ## Profiles
-//!
-//! [`crate::tree::AgentsTree::ProfileDef`] registers a reusable bundle (`extends` + children).
-//! [`crate::tree::ScopeKind::Profile`] scopes merge that bundle (base → tip, then local children)
-//! and emit with the `profile--{id}` rule prefix.
+//! Every per-agent behaviour — config directory, rule filename rewrites, Claude's settings scope
+//! precedence, Cursor's `.mdc` vs Claude's `.md`, Codex's single-file `AGENTS.md`, etc. — lives
+//! on a [`Dialect`](crate::dialect::Dialect) implementation in [`crate::dialects`]. This module
+//! is the orchestrator: it walks the tree, merges profile inheritance, and dispatches each leaf
+//! to every enabled dialect via `emit_*`. No `.cursor` / `.claude` string literals live here.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -27,14 +19,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
+use crate::dialect::Dialect;
+use crate::dialects;
 use crate::id::{ProfileId, ProjectKey};
-use crate::model::{
-    AgentId, AgentSpec, HooksLayout, IgnoreKind, LinkKind, McpLayout, PlannedLink, RulesLayout,
-    SettingsLayout, SettingsScope, SkillsLayout, SPECS,
-};
+use crate::model::{AgentId, IgnoreKind, PlannedLink, SettingsScope};
 use crate::tree::{
-    AgentsTree, HookBinding, RuleBody, RuleNode, ScopeKind, SettingsBody, SettingsNode, SkillBody,
-    SkillNode, SCOPE_GLOBAL,
+    AgentNode, AgentsTree, HookBinding, RuleNode, ScopeKind, SettingsNode, SkillNode, SCOPE_GLOBAL,
 };
 
 /// Context the compiler uses to resolve destinations relative to a project root.
@@ -43,12 +33,13 @@ pub struct CompileContext {
     pub project_path: PathBuf,
     /// Project key used for Cursor rule scope prefixes and Codex `AGENTS.md` selection.
     pub project_key: ProjectKey,
-    /// When true, the compiler emits [`LinkKind::Copy`] instead of hard/symbolic links for rule
-    /// materialisation. Useful for dry-runs and filesystems that don't support hard links.
+    /// When true, the compiler emits [`crate::model::LinkKind::Copy`] instead of hard/symbolic
+    /// links for rule materialisation. Useful for dry-runs and filesystems that don't support
+    /// hard links.
     #[serde(default)]
     pub force_copy_for_rules: bool,
-    /// Restrict emission to a subset of agents. `None` means "every agent in [`SPECS`]" (current
-    /// default). Set to `Some(vec![AgentId::ClaudeCode])` to compile a Claude-only plan.
+    /// Restrict emission to a subset of agents. `None` (default) means "every registered
+    /// dialect".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_agents: Option<Vec<AgentId>>,
 }
@@ -79,9 +70,14 @@ impl CompileContext {
     }
 }
 
-/// Iterate every agent spec enabled in this context, in `SPECS` order.
-fn enabled_specs<'c>(ctx: &'c CompileContext) -> impl Iterator<Item = &'static AgentSpec> + 'c {
-    SPECS.iter().filter(move |s| ctx.agent_enabled(s.agent))
+/// Every dialect enabled in the current [`CompileContext`], in registry order.
+fn enabled_dialects<'c>(
+    ctx: &'c CompileContext,
+) -> impl Iterator<Item = &'static dyn Dialect> + 'c {
+    dialects::all()
+        .iter()
+        .copied()
+        .filter(move |d| ctx.agent_enabled(d.agent()))
 }
 
 /// A single filesystem operation the IO layer must perform to apply the plan.
@@ -117,6 +113,8 @@ pub enum CompileError {
     ProfileCycle(ProfileId),
     #[error("profile {0} contains nested scopes; use only rules/skills/settings/mcp/text leaves")]
     InvalidProfileChildren(ProfileId),
+    #[error("template render failure in {where_}: {message}")]
+    TemplateRender { where_: String, message: String },
 }
 
 /// Map of [`ProfileId`] → merged leaf children (after resolving `extends`).
@@ -237,6 +235,7 @@ fn validate_profile_def_children(
         match c {
             AgentsTree::Rules(_)
             | AgentsTree::Skills(_)
+            | AgentsTree::Agents(_)
             | AgentsTree::Settings(_)
             | AgentsTree::Hooks(_)
             | AgentsTree::Ignore { .. }
@@ -274,11 +273,12 @@ fn resolve_profile_merged(
 }
 
 /// Merge leaf bundles: later `right` overrides earlier `left` by key (rule name, skill name, etc.).
-fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<AgentsTree> {
+pub(crate) fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<AgentsTree> {
     #[derive(Default)]
     struct Acc {
         rules: HashMap<String, RuleNode>,
         skills: HashMap<String, SkillNode>,
+        agents: HashMap<String, AgentNode>,
         settings: HashMap<(AgentId, SettingsScope, Option<String>), SettingsNode>,
         hooks: Vec<HookBinding>,
         ignores: HashMap<(AgentId, IgnoreKind), Vec<String>>,
@@ -296,6 +296,11 @@ fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<Agents
             AgentsTree::Skills(ss) => {
                 for s in ss {
                     acc.skills.insert(s.name.clone(), s.clone());
+                }
+            }
+            AgentsTree::Agents(ags) => {
+                for a in ags {
+                    acc.agents.insert(a.name.clone(), a.clone());
                 }
             }
             AgentsTree::Settings(st) => {
@@ -359,6 +364,17 @@ fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<Agents
         ));
     }
 
+    let mut agent_names: Vec<_> = acc.agents.keys().cloned().collect();
+    agent_names.sort();
+    if !agent_names.is_empty() {
+        out.push(AgentsTree::Agents(
+            agent_names
+                .into_iter()
+                .map(|k| acc.agents.remove(&k).unwrap())
+                .collect(),
+        ));
+    }
+
     let mut setting_keys: Vec<_> = acc.settings.keys().cloned().collect();
     setting_keys.sort();
     if !setting_keys.is_empty() {
@@ -404,7 +420,7 @@ fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<Agents
     out
 }
 
-fn merge_json_objects(a: &Value, b: &Value) -> Value {
+pub(crate) fn merge_json_objects(a: &Value, b: &Value) -> Value {
     match (a, b) {
         (Value::Object(am), Value::Object(bm)) => {
             let mut out = am.clone();
@@ -430,9 +446,7 @@ fn compile_node(
     plan: &mut CompiledPlan,
 ) -> Result<(), CompileError> {
     match node {
-        AgentsTree::ProfileDef { .. } => {
-            // Registered at build time; emission happens from Profile scopes or extends.
-        }
+        AgentsTree::ProfileDef { .. } => {}
         AgentsTree::Scope { kind, children } => {
             let prefix = kind.rule_prefix();
             if let ScopeKind::Profile { id } = kind {
@@ -448,16 +462,60 @@ fn compile_node(
                 }
             }
         }
-        AgentsTree::Rules(rules) => emit_rules(rules, ctx, current_scope, plan),
-        AgentsTree::Skills(skills) => emit_skills(skills, ctx, plan),
-        AgentsTree::Settings(settings) => emit_settings(settings, ctx, plan),
-        AgentsTree::Hooks(hooks) => emit_hooks(hooks, ctx, plan),
+        AgentsTree::Rules(rules) => {
+            for d in enabled_dialects(ctx) {
+                plan.extend(d.emit_rules(ctx, current_scope, rules));
+            }
+        }
+        AgentsTree::Skills(skills) => {
+            for d in enabled_dialects(ctx) {
+                plan.extend(d.emit_skills(ctx, skills));
+            }
+        }
+        AgentsTree::Agents(agents) => {
+            for d in enabled_dialects(ctx) {
+                plan.extend(d.emit_agents(ctx, agents));
+            }
+        }
+        AgentsTree::Settings(settings) => {
+            for d in enabled_dialects(ctx) {
+                plan.extend(d.emit_settings(ctx, settings));
+            }
+        }
+        AgentsTree::Hooks(hooks) => {
+            for d in enabled_dialects(ctx) {
+                plan.extend(d.emit_hooks(ctx, hooks));
+            }
+        }
         AgentsTree::Ignore {
             agent,
             kind,
             patterns,
-        } => emit_ignore(*agent, *kind, patterns, ctx, plan),
-        AgentsTree::Mcp(mcp_json) => emit_mcp(mcp_json, ctx, plan),
+        } => {
+            if ctx.agent_enabled(*agent) {
+                let d = dialects::get(*agent);
+                let emitted = d.emit_ignore(ctx, *kind, patterns);
+                if emitted.is_empty() && agent.spec().ignore_filename(*kind).is_none() {
+                    plan.warnings.push(format!(
+                        "agent `{}` has no ignore file for kind `{:?}`; skipping",
+                        agent.as_str(),
+                        kind
+                    ));
+                } else {
+                    plan.extend(emitted);
+                }
+            } else {
+                plan.warnings.push(format!(
+                    "ignore leaf for disabled agent `{}` dropped",
+                    agent.as_str()
+                ));
+            }
+        }
+        AgentsTree::Mcp(mcp_json) => {
+            for d in enabled_dialects(ctx) {
+                plan.extend(d.emit_mcp(ctx, mcp_json));
+            }
+        }
         AgentsTree::TextFile { name, body } => {
             plan.push(FsOp::WriteFile {
                 path: ctx.project_path.join(name),
@@ -467,350 +525,6 @@ fn compile_node(
         }
     }
     Ok(())
-}
-
-/// Data-driven rule emission. Walks every agent spec with a [`RulesLayout`] and produces the
-/// right filesystem ops — directory vs single-file layout, Cursor/Claude filename rewrites, hard
-/// vs symbolic links, and scope-filter policy (Codex's `agents.*` picker).
-fn emit_rules(rules: &[RuleNode], ctx: &CompileContext, scope: &str, plan: &mut CompiledPlan) {
-    for spec in enabled_specs(ctx) {
-        let Some(layout) = spec.rules else { continue };
-        emit_rules_for(spec, layout, rules, ctx, scope, plan);
-    }
-}
-
-fn emit_rules_for(
-    spec: &AgentSpec,
-    layout: RulesLayout,
-    rules: &[RuleNode],
-    ctx: &CompileContext,
-    scope: &str,
-    plan: &mut CompiledPlan,
-) {
-    if let Some(dir) = layout.dir {
-        let dest_dir = ctx.project_path.join(spec.config_dir).join(dir);
-        plan.push(FsOp::MkdirP {
-            path: dest_dir.clone(),
-        });
-
-        let link_kind = if ctx.force_copy_for_rules && layout.link_kind == LinkKind::HardLink {
-            LinkKind::Copy
-        } else {
-            layout.link_kind
-        };
-
-        for r in rules {
-            let rewritten = layout.name_rewrite.apply(&r.name);
-            let dest = dest_dir.join(format!("{scope}{sep}{rewritten}", sep = layout.scope_sep));
-            emit_rule_body(plan, spec.agent, link_kind, dest, &r.body);
-        }
-        return;
-    }
-
-    if let Some(filename) = layout.single_file {
-        // Single-file layouts (e.g. Codex's `AGENTS.md`): one rule wins. Prefer the global and
-        // project scopes; select rules whose name matches `single_file_rule_stem` if set.
-        if scope != SCOPE_GLOBAL && scope != ctx.project_key.as_str() {
-            return;
-        }
-        let selected = match layout.single_file_rule_stem {
-            Some(stem) => rules.iter().find(|r| r.name.starts_with(stem)),
-            None => rules.first(),
-        };
-        let Some(r) = selected else { return };
-        let dest = ctx.project_path.join(filename);
-        emit_rule_body(plan, spec.agent, layout.link_kind, dest, &r.body);
-    }
-}
-
-/// Shared emission for inline vs linked rule bodies.
-fn emit_rule_body(
-    plan: &mut CompiledPlan,
-    agent: AgentId,
-    link_kind: LinkKind,
-    dest: PathBuf,
-    body: &RuleBody,
-) {
-    match body {
-        RuleBody::Inline(text) => plan.push(FsOp::WriteFile {
-            path: dest,
-            overwrite: false,
-            content: text.clone(),
-        }),
-        RuleBody::Source(src) => plan.push(FsOp::Link(PlannedLink {
-            agent,
-            kind: link_kind,
-            source: src.clone(),
-            dest,
-        })),
-    }
-}
-
-/// Data-driven skill emission. Cursor gets flat-file commands; Claude/Codex get skill folders.
-fn emit_skills(skills: &[SkillNode], ctx: &CompileContext, plan: &mut CompiledPlan) {
-    for spec in enabled_specs(ctx) {
-        match spec.skills {
-            SkillsLayout::FlatFile { dir, extension } => {
-                let dest_dir = ctx.project_path.join(spec.config_dir).join(dir);
-                plan.push(FsOp::MkdirP {
-                    path: dest_dir.clone(),
-                });
-                for s in skills {
-                    let file_name = format!("{}.{}", s.name, extension);
-                    let dest = dest_dir.join(&file_name);
-                    match &s.body {
-                        SkillBody::Inline(md) => plan.push(FsOp::WriteFile {
-                            path: dest,
-                            overwrite: false,
-                            content: md.clone(),
-                        }),
-                        SkillBody::Source(src_dir) => {
-                            // Flat-file targets link the manifest (e.g. Claude/Codex SKILL.md or
-                            // a flat README.md) so Cursor's command file tracks upstream edits.
-                            let manifest = src_dir.join("SKILL.md");
-                            plan.push(FsOp::Link(PlannedLink {
-                                agent: spec.agent,
-                                kind: LinkKind::Symlink,
-                                source: manifest,
-                                dest,
-                            }));
-                        }
-                    }
-                }
-            }
-            SkillsLayout::Directory { dir, manifest_file } => {
-                let dest_dir = ctx.project_path.join(spec.config_dir).join(dir);
-                plan.push(FsOp::MkdirP {
-                    path: dest_dir.clone(),
-                });
-                for s in skills {
-                    let skill_dir = dest_dir.join(&s.name);
-                    match &s.body {
-                        SkillBody::Inline(md) => {
-                            plan.push(FsOp::WriteFile {
-                                path: skill_dir.join(manifest_file),
-                                overwrite: false,
-                                content: md.clone(),
-                            });
-                        }
-                        SkillBody::Source(src_dir) => {
-                            plan.push(FsOp::Link(PlannedLink {
-                                agent: spec.agent,
-                                kind: LinkKind::Symlink,
-                                source: src_dir.clone(),
-                                dest: skill_dir,
-                            }));
-                        }
-                    }
-                }
-            }
-            SkillsLayout::None => {}
-        }
-    }
-}
-
-fn emit_settings(settings: &[SettingsNode], ctx: &CompileContext, plan: &mut CompiledPlan) {
-    for s in settings {
-        if !ctx.agent_enabled(s.agent) {
-            continue;
-        }
-        let spec = s.agent.spec();
-        let Some(file_name) = resolve_settings_file_name(&spec.settings, s) else {
-            plan.warnings.push(format!(
-                "agent `{}` has no settings file for scope `{:?}`; set SettingsNode.file_name to override",
-                spec.id, s.scope
-            ));
-            continue;
-        };
-
-        let dest = ctx.project_path.join(spec.config_dir).join(file_name);
-        if let Some(parent) = dest.parent() {
-            plan.push(FsOp::MkdirP {
-                path: parent.to_path_buf(),
-            });
-        }
-        match &s.body {
-            SettingsBody::Empty => plan.push(FsOp::WriteFile {
-                path: dest,
-                overwrite: false,
-                content: empty_settings_body(spec),
-            }),
-            SettingsBody::Inline(text) => plan.push(FsOp::WriteFile {
-                path: dest,
-                overwrite: false,
-                content: text.clone(),
-            }),
-            SettingsBody::Source(src) => plan.push(FsOp::Link(PlannedLink {
-                agent: s.agent,
-                kind: LinkKind::HardLink,
-                source: src.clone(),
-                dest,
-            })),
-        }
-    }
-}
-
-/// Pick the right filename for a settings node: explicit override wins, else the spec's layout.
-fn resolve_settings_file_name(layout: &SettingsLayout, s: &SettingsNode) -> Option<String> {
-    if let Some(name) = &s.file_name {
-        return Some(name.clone());
-    }
-    match s.scope {
-        SettingsScope::Managed => layout.managed.map(str::to_owned),
-        SettingsScope::User | SettingsScope::Project => layout.base.map(str::to_owned),
-        SettingsScope::Local => layout.local.map(str::to_owned),
-    }
-}
-
-/// Empty-body content per agent. GitHub's `copilot-instructions.md` is a markdown file, not JSON —
-/// checking the file extension is enough to pick the right placeholder.
-fn empty_settings_body(spec: &AgentSpec) -> String {
-    let is_markdown = spec
-        .settings
-        .base
-        .map(|n| n.ends_with(".md"))
-        .unwrap_or(false);
-    if is_markdown {
-        String::new()
-    } else {
-        "{}\n".into()
-    }
-}
-
-/// Emit hooks to every agent that supports them, rewriting into the agent's preferred format:
-/// Claude folds them into `settings.json` (or `settings.local.json`); Cursor writes
-/// `.cursor/hooks.json`.
-fn emit_hooks(hooks: &[HookBinding], ctx: &CompileContext, plan: &mut CompiledPlan) {
-    for spec in enabled_specs(ctx) {
-        match spec.hooks {
-            HooksLayout::StandaloneFile { filename } => {
-                let dest = ctx.project_path.join(spec.config_dir).join(filename);
-                if let Some(parent) = dest.parent() {
-                    plan.push(FsOp::MkdirP {
-                        path: parent.to_path_buf(),
-                    });
-                }
-                let rendered = render_hooks_json(hooks);
-                plan.push(FsOp::WriteFile {
-                    path: dest,
-                    overwrite: false,
-                    content: rendered,
-                });
-            }
-            HooksLayout::InSettings { key } => {
-                // Claude carries hooks inside settings.json. Emit the hooks block as a separate
-                // `hooks.emitted.json` sibling that applyers can merge into settings.json; we
-                // keep emission pure here and leave the merge to the IO layer.
-                let Some(filename) = spec.settings.base else {
-                    continue;
-                };
-                let companion = format!("{filename}.{key}.json");
-                let dest = ctx.project_path.join(spec.config_dir).join(&companion);
-                if let Some(parent) = dest.parent() {
-                    plan.push(FsOp::MkdirP {
-                        path: parent.to_path_buf(),
-                    });
-                }
-                let rendered = render_hooks_in_settings(hooks, key);
-                plan.push(FsOp::WriteFile {
-                    path: dest,
-                    overwrite: false,
-                    content: rendered,
-                });
-            }
-            HooksLayout::None => {
-                // Silently skip — not every agent supports hooks.
-            }
-        }
-    }
-}
-
-fn render_hooks_json(hooks: &[HookBinding]) -> String {
-    let json = serde_json::json!({
-        "version": "1.0",
-        "hooks": hooks_by_event(hooks),
-    });
-    serde_json::to_string_pretty(&json).unwrap_or_else(|_| "{}".into()) + "\n"
-}
-
-fn render_hooks_in_settings(hooks: &[HookBinding], key: &str) -> String {
-    let json = serde_json::json!({ key: hooks_by_event(hooks) });
-    serde_json::to_string_pretty(&json).unwrap_or_else(|_| "{}".into()) + "\n"
-}
-
-fn hooks_by_event(hooks: &[HookBinding]) -> Value {
-    use std::collections::BTreeMap;
-    let mut grouped: BTreeMap<&'static str, Vec<Value>> = BTreeMap::new();
-    for h in hooks {
-        let entry = serde_json::json!({
-            "matcher": h.matcher,
-            "hooks": [serde_json::to_value(&h.handler).unwrap_or(Value::Null)],
-        });
-        grouped.entry(h.event.as_str()).or_default().push(entry);
-    }
-    serde_json::to_value(&grouped).unwrap_or(Value::Null)
-}
-
-fn emit_ignore(
-    agent: AgentId,
-    kind: IgnoreKind,
-    patterns: &[String],
-    ctx: &CompileContext,
-    plan: &mut CompiledPlan,
-) {
-    if !ctx.agent_enabled(agent) {
-        return;
-    }
-    let Some(filename) = agent.spec().ignore_filename(kind) else {
-        plan.warnings.push(format!(
-            "agent `{}` has no ignore file for kind `{:?}`; skipping",
-            agent.spec().id,
-            kind
-        ));
-        return;
-    };
-    let dest = ctx.project_path.join(filename);
-    let content = if patterns.is_empty() {
-        String::new()
-    } else {
-        let mut s = patterns.join("\n");
-        s.push('\n');
-        s
-    };
-    plan.push(FsOp::WriteFile {
-        path: dest,
-        overwrite: false,
-        content,
-    });
-}
-
-/// Data-driven MCP fan-out. Every agent that declares an [`McpLayout::project_file`] gets the
-/// rendered JSON at its configured path.
-fn emit_mcp(mcp_json: &Value, ctx: &CompileContext, plan: &mut CompiledPlan) {
-    let rendered = serde_json::to_string_pretty(mcp_json).unwrap_or_else(|_| "{}".into()) + "\n";
-    let mut seen: HashSet<PathBuf> = HashSet::new();
-    for spec in enabled_specs(ctx) {
-        let McpLayout {
-            project_file: Some(rel),
-        } = spec.mcp
-        else {
-            continue;
-        };
-        let dest = ctx.project_path.join(rel);
-        if !seen.insert(dest.clone()) {
-            continue;
-        }
-        if let Some(parent) = dest.parent() {
-            plan.push(FsOp::MkdirP {
-                path: parent.to_path_buf(),
-            });
-        }
-        plan.push(FsOp::WriteFile {
-            path: dest,
-            overwrite: false,
-            content: rendered.clone(),
-        });
-    }
 }
 
 impl AsRef<Path> for CompileContext {

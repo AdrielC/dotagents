@@ -52,10 +52,13 @@ fn tree_compiles_rules_into_cursor_and_claude() {
     assert!(plan.ops.iter().any(|op| matches!(op,
         FsOp::WriteFile { path, .. }
             if path == &project().join(".claude/rules/global--010-style.md"))));
-    // Skill wrote to all three target families.
-    assert!(plan.ops.iter().any(|op| matches!(op,
-        FsOp::WriteFile { path, .. }
-            if path == &project().join(".cursor/commands/reviewer.md"))));
+    // Skill lands on Claude + Codex — Cursor has no slash-commands directory analogous.
+    assert!(
+        !plan.ops.iter().any(|op| matches!(op,
+            FsOp::WriteFile { path, .. }
+                if path == &project().join(".cursor/commands/reviewer.md"))),
+        "skills do not leak into .cursor/commands/"
+    );
     assert!(plan.ops.iter().any(|op| matches!(op,
         FsOp::WriteFile { path, .. }
             if path == &project().join(".claude/skills/reviewer/SKILL.md"))));

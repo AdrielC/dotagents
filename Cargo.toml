@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/agentz-core",
     "crates/agentz",
+    "crates/agentz-cli",
 ]
 
 [workspace.package]
@@ -40,3 +41,6 @@ zenoh = { version = "1", default-features = false, features = ["unstable", "inte
 agent-client-protocol = "0.10"
 tempfile = "3"
 uuid = { version = "1", features = ["serde", "v7"] }
+minijinja = { version = "2", default-features = false, features = ["builtins", "serde"] }
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
