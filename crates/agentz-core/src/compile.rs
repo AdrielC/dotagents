@@ -29,12 +29,12 @@ use thiserror::Error;
 
 use crate::id::{ProfileId, ProjectKey};
 use crate::model::{
-    AgentId, AgentSpec, HooksLayout, IgnoreKind, LinkKind, McpLayout, PlannedLink, RulesLayout,
-    SettingsLayout, SettingsScope, SkillsLayout, SPECS,
+    AgentId, AgentSpec, AgentsLayout, HooksLayout, IgnoreKind, LinkKind, McpLayout, PlannedLink,
+    RulesLayout, SettingsLayout, SettingsScope, SkillsLayout, SPECS,
 };
 use crate::tree::{
-    AgentsTree, HookBinding, RuleBody, RuleNode, ScopeKind, SettingsBody, SettingsNode, SkillBody,
-    SkillNode, SCOPE_GLOBAL,
+    AgentBody, AgentNode, AgentsTree, HookBinding, RuleBody, RuleNode, ScopeKind, SettingsBody,
+    SettingsNode, SkillBody, SkillNode, SCOPE_GLOBAL,
 };
 
 /// Context the compiler uses to resolve destinations relative to a project root.
@@ -237,6 +237,7 @@ fn validate_profile_def_children(
         match c {
             AgentsTree::Rules(_)
             | AgentsTree::Skills(_)
+            | AgentsTree::Agents(_)
             | AgentsTree::Settings(_)
             | AgentsTree::Hooks(_)
             | AgentsTree::Ignore { .. }
@@ -279,6 +280,7 @@ fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<Agents
     struct Acc {
         rules: HashMap<String, RuleNode>,
         skills: HashMap<String, SkillNode>,
+        agents: HashMap<String, AgentNode>,
         settings: HashMap<(AgentId, SettingsScope, Option<String>), SettingsNode>,
         hooks: Vec<HookBinding>,
         ignores: HashMap<(AgentId, IgnoreKind), Vec<String>>,
@@ -296,6 +298,11 @@ fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<Agents
             AgentsTree::Skills(ss) => {
                 for s in ss {
                     acc.skills.insert(s.name.clone(), s.clone());
+                }
+            }
+            AgentsTree::Agents(ags) => {
+                for a in ags {
+                    acc.agents.insert(a.name.clone(), a.clone());
                 }
             }
             AgentsTree::Settings(st) => {
@@ -355,6 +362,17 @@ fn merge_scope_children(left: &[AgentsTree], right: &[AgentsTree]) -> Vec<Agents
             skill_names
                 .into_iter()
                 .map(|k| acc.skills.remove(&k).unwrap())
+                .collect(),
+        ));
+    }
+
+    let mut agent_names: Vec<_> = acc.agents.keys().cloned().collect();
+    agent_names.sort();
+    if !agent_names.is_empty() {
+        out.push(AgentsTree::Agents(
+            agent_names
+                .into_iter()
+                .map(|k| acc.agents.remove(&k).unwrap())
                 .collect(),
         ));
     }
@@ -450,6 +468,7 @@ fn compile_node(
         }
         AgentsTree::Rules(rules) => emit_rules(rules, ctx, current_scope, plan),
         AgentsTree::Skills(skills) => emit_skills(skills, ctx, plan),
+        AgentsTree::Agents(agents) => emit_agents(agents, ctx, plan),
         AgentsTree::Settings(settings) => emit_settings(settings, ctx, plan),
         AgentsTree::Hooks(hooks) => emit_hooks(hooks, ctx, plan),
         AgentsTree::Ignore {
@@ -605,6 +624,36 @@ fn emit_skills(skills: &[SkillNode], ctx: &CompileContext, plan: &mut CompiledPl
                 }
             }
             SkillsLayout::None => {}
+        }
+    }
+}
+
+/// Data-driven subagent emission. Claude writes `.claude/agents/<name>.md`; agents without an
+/// [`AgentsLayout`] silently skip.
+fn emit_agents(agents: &[AgentNode], ctx: &CompileContext, plan: &mut CompiledPlan) {
+    for spec in enabled_specs(ctx) {
+        let AgentsLayout::FlatFile { dir, extension } = spec.agents else {
+            continue;
+        };
+        let dest_dir = ctx.project_path.join(spec.config_dir).join(dir);
+        plan.push(FsOp::MkdirP {
+            path: dest_dir.clone(),
+        });
+        for a in agents {
+            let dest = dest_dir.join(format!("{}.{}", a.name, extension));
+            match &a.body {
+                AgentBody::Inline(text) => plan.push(FsOp::WriteFile {
+                    path: dest,
+                    overwrite: false,
+                    content: text.clone(),
+                }),
+                AgentBody::Source(src) => plan.push(FsOp::Link(PlannedLink {
+                    agent: spec.agent,
+                    kind: LinkKind::Symlink,
+                    source: src.clone(),
+                    dest,
+                })),
+            }
         }
     }
 }

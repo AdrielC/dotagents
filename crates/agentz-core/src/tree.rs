@@ -86,6 +86,24 @@ pub enum SkillBody {
     Source(PathBuf),
 }
 
+/// A Claude-style **subagent** (`.claude/agents/<name>.md`): markdown with YAML frontmatter
+/// (`name`, `description`, `tools`, `model`, …) and a body that's the system prompt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentNode {
+    /// Agent id (becomes the filename stem). Kebab-case by convention.
+    pub name: String,
+    pub body: AgentBody,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "value")]
+pub enum AgentBody {
+    /// Full text of the subagent markdown (frontmatter + body).
+    Inline(String),
+    /// Path to an existing `.md` file on disk that the IO layer will link to.
+    Source(PathBuf),
+}
+
 /// Per-agent settings file. The compiler resolves the actual filename from
 /// [`crate::model::AgentSpec::settings_filename`] given the agent + [`SettingsScope`] so callers
 /// don't hardcode names like `settings.local.json`.
@@ -385,6 +403,9 @@ pub enum AgentsTree {
     Rules(Vec<RuleNode>),
     /// A bundle of skill directories for this scope.
     Skills(Vec<SkillNode>),
+    /// A bundle of **subagent** definitions (Claude's `.claude/agents/<name>.md`). Data-driven
+    /// per-agent emission — agents without a subagent layout (Cursor, Codex, …) ignore these.
+    Agents(Vec<AgentNode>),
     /// Per-agent settings files (scope-aware: `settings.json` vs. `settings.local.json`).
     Settings(Vec<SettingsNode>),
     /// Hooks bundled as one node. The compiler routes each [`HookBinding`] into the correct
