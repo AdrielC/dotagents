@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::WorkstreamId;
 
+/// Zenoh key prefix template namespace. Callers format `{ZENOH_KEY_NAMESPACE}/ws/{id}` etc.
+/// This is the single source of truth for Zenoh routing; duplex keys, ACP keys, and MCP keys all
+/// nest under it so the runtime can rotate the prefix without touching call sites.
+pub const ZENOH_KEY_NAMESPACE: &str = "cyberdyne";
+
+/// Key segment that namespaces per-workstream topics: `{ZENOH_KEY_NAMESPACE}/{ZENOH_WS_SEGMENT}/{id}`.
+pub const ZENOH_WS_SEGMENT: &str = "ws";
+
 /// Category of a workstream (used in scope rule prefixes and routing metadata).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -21,6 +29,7 @@ pub enum WorkstreamKind {
 
 impl WorkstreamKind {
     /// Short segment in compiled rule filenames: `ws--{segment}--{slug}--*`.
+    #[must_use]
     pub fn as_rule_segment(self) -> &'static str {
         match self {
             WorkstreamKind::Feature => "feature",
@@ -66,11 +75,13 @@ impl WorkstreamDescriptor {
         Self::new(WorkstreamId::new_v7(), slug, title)
     }
 
-    /// Zenoh-friendly key prefix: `cyberdyne/ws/{id}`.
+    /// Zenoh-friendly key prefix: `{ZENOH_KEY_NAMESPACE}/{ZENOH_WS_SEGMENT}/{id}`.
+    #[must_use]
     pub fn key_prefix(&self) -> String {
-        format!("cyberdyne/ws/{}", self.id)
+        format!("{ZENOH_KEY_NAMESPACE}/{ZENOH_WS_SEGMENT}/{}", self.id)
     }
 
+    #[must_use]
     pub fn key(&self, suffix: &str) -> String {
         if suffix.is_empty() {
             self.key_prefix()

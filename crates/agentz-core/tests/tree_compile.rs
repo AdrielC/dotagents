@@ -34,7 +34,8 @@ fn tree_compiles_rules_into_cursor_and_claude() {
         }]),
         AgentsTree::Settings(vec![SettingsNode {
             agent: AgentId::Cursor,
-            file_name: "settings.json".into(),
+            scope: Default::default(),
+            file_name: Some("settings.json".into()),
             body: SettingsBody::Inline("{\"x\":1}".into()),
         }]),
         AgentsTree::Mcp(serde_json::json!({ "mcpServers": {} })),
