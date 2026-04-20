@@ -17,6 +17,7 @@
 
 pub mod apply;
 pub mod config;
+pub mod env;
 
 #[cfg(feature = "mcp")]
 pub mod mcp;
