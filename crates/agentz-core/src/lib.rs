@@ -24,11 +24,16 @@
 //! actually run installs, talk MCP, or route Zenoh traffic.
 
 pub mod compile;
+pub mod config;
+pub mod dialect;
+pub mod dialects;
+pub mod diff;
 pub mod id;
 pub mod model;
 pub mod parser;
 pub mod plan;
 pub mod plugins;
+pub mod render;
 pub mod repo;
 pub mod schema;
 pub mod tree;
@@ -36,6 +41,8 @@ pub mod vocabulary;
 pub mod workstream;
 
 pub use compile::{CompileContext, CompileError, CompiledPlan, FsOp, ProfileRegistry};
+pub use dialect::{Dialect, FileSource, MemFileSource, RealFileSource};
+pub use diff::{Diff, DiffEntry, EntryKind};
 pub use id::{ProfileId, ProjectKey, StepId, WorkstreamId};
 pub use model::{
     cursor_display_name, AgentId, AgentSpec, AgentsLayout, CursorRuleNaming, HooksLayout,
@@ -44,6 +51,9 @@ pub use model::{
 };
 pub use plan::{Dag, DagError, Objective, Plan, Step, StepKind, StepStatus};
 pub use plugins::{InstallContext, ProjectLinker};
+pub use render::{
+    render_tree, ProjectVars, RenderContext, RenderError, RenderOptions, WorkstreamVars,
+};
 pub use repo::{Repo, RepoId, RepoSource, Workspace};
 pub use schema::{PluginSchemaEntry, PluginSchemaRegistry, PluginsSection, SchemaError};
 pub use tree::{

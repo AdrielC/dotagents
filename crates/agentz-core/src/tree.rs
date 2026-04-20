@@ -245,10 +245,17 @@ pub enum HookEvent {
 }
 
 impl HookEvent {
-    /// Exact event name as Anthropic and Cursor document it. Stable; used on the wire.
+    /// **Claude-Code event name** (PascalCase). This is what goes into `settings.json.hooks.*`.
     #[must_use]
     pub fn as_str(self) -> &'static str {
-        match self {
+        self.claude_name().unwrap_or("Unknown")
+    }
+
+    /// Claude-Code event spelling (PascalCase). Returns `None` for Cursor-only events
+    /// (`BeforeShellExecution`, `AfterFileEdit`, …) that Claude doesn't consume.
+    #[must_use]
+    pub fn claude_name(self) -> Option<&'static str> {
+        Some(match self {
             HookEvent::SessionStart => "SessionStart",
             HookEvent::SessionEnd => "SessionEnd",
             HookEvent::PreToolUse => "PreToolUse",
@@ -271,11 +278,48 @@ impl HookEvent {
             HookEvent::Notification => "Notification",
             HookEvent::Elicitation => "Elicitation",
             HookEvent::ElicitationResult => "ElicitationResult",
+            HookEvent::BeforeShellExecution
+            | HookEvent::AfterFileEdit
+            | HookEvent::BeforeTabFileRead
+            | HookEvent::AfterTabFileEdit => return None,
+        })
+    }
+
+    /// Cursor event spelling (camelCase) for `.cursor/hooks.json`. Returns `None` if the event
+    /// is Claude-only (e.g. [`Self::PreCompact`], [`Self::InstructionsLoaded`]) and shouldn't be
+    /// written to Cursor. The canonical Cursor event list comes from
+    /// <https://cursor.com/docs/agent/hooks>.
+    #[must_use]
+    pub fn cursor_name(self) -> Option<&'static str> {
+        Some(match self {
+            HookEvent::SessionStart => "sessionStart",
+            HookEvent::SessionEnd => "sessionEnd",
+            HookEvent::PreToolUse => "preToolUse",
+            HookEvent::PostToolUse => "postToolUse",
+            HookEvent::PostToolUseFailure => "postToolUseFailure",
+            HookEvent::SubagentStart => "subagentStart",
+            HookEvent::SubagentStop => "subagentStop",
+            HookEvent::UserPromptSubmit => "beforeSubmitPrompt",
+            HookEvent::Stop => "stop",
+            HookEvent::PreCompact => "preCompact",
             HookEvent::BeforeShellExecution => "beforeShellExecution",
             HookEvent::AfterFileEdit => "afterFileEdit",
             HookEvent::BeforeTabFileRead => "beforeTabFileRead",
             HookEvent::AfterTabFileEdit => "afterTabFileEdit",
-        }
+            // Claude-only events — no Cursor equivalent.
+            HookEvent::PermissionRequest
+            | HookEvent::PermissionDenied
+            | HookEvent::StopFailure
+            | HookEvent::PostCompact
+            | HookEvent::InstructionsLoaded
+            | HookEvent::FileChanged
+            | HookEvent::CwdChanged
+            | HookEvent::WorktreeCreate
+            | HookEvent::WorktreeRemove
+            | HookEvent::Notification
+            | HookEvent::Elicitation
+            | HookEvent::ElicitationResult => return None,
+        })
     }
 }
 

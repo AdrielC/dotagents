@@ -77,9 +77,10 @@ fn claude_dir_round_trips_into_cursor_and_claude() {
         out.join(".cursor/rules/global--010-style.mdc").is_file(),
         "cursor .mdc produced from claude rules"
     );
+    // Cursor has no slash-commands directory analogous to Claude's — skills stay Claude/Codex.
     assert!(
-        out.join(".cursor/commands/review.md").is_file(),
-        "cursor command produced from claude skill"
+        !out.join(".cursor/commands/review.md").exists(),
+        "skills do not leak into .cursor/commands/"
     );
     assert!(
         out.join(".cursor/mcp.json").is_file(),
